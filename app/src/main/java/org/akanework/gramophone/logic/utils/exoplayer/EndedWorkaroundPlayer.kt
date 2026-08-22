@@ -38,6 +38,8 @@ import org.akanework.gramophone.logic.utils.CircularShuffleOrder
 import org.akanework.gramophone.logic.utils.Flags
 import org.akanework.gramophone.logic.utils.SemanticLyrics
 import org.json.JSONObject
+import androidx.preference.PreferenceManager
+import org.akanework.gramophone.logic.getBooleanStrict
 import uk.akane.libphonograph.items.EXTRA_HD_ARTWORK_URI
 import uk.akane.libphonograph.items.hdArtworkUri
 import java.util.Objects
@@ -52,7 +54,8 @@ class EndedWorkaroundPlayer(
     val context: Context,
     exoPlayer: ExoPlayer,
     private val getLyric: () -> SemanticLyrics?,
-    val queueBoard: QueueBoard
+    val queueBoard: QueueBoard,
+    private val getNotificationLyric: () -> CharSequence? = { null }
 ) : ForwardingSimpleBasePlayer(exoPlayer),
     Player.Listener {
 
@@ -97,9 +100,11 @@ class EndedWorkaroundPlayer(
     }
 
     fun updateLyricNow() {
-        if (context.packageName == "com.tencent.qqmusic") {
-            invalidateState()
-        }
+        invalidateState()
+    }
+
+    fun invalidatePlayerState() {
+        invalidateState()
     }
 
     override fun getState(): State {
@@ -116,6 +121,29 @@ class EndedWorkaroundPlayer(
                             remove(EXTRA_HD_ARTWORK_URI)
                         })
                         .build()
+                )
+                .build()
+        }
+        val notifLyric = getNotificationLyric()
+        if (!notifLyric.isNullOrBlank()) {
+            val origTitle = superState.currentMetadata.title?.toString() ?: ""
+            val origArtist = superState.currentMetadata.artist?.toString() ?: ""
+            val subtitle = if (origArtist.isNotBlank() && origTitle.isNotBlank()) {
+                "$origArtist - $origTitle"
+            } else {
+                origArtist.ifBlank { origTitle }
+            }
+            val metadataWithLyric = superState.currentMetadata.buildUpon()
+                .setTitle(notifLyric)
+                .setArtist(subtitle)
+                .setDisplayTitle(notifLyric)
+                .setSubtitle(subtitle)
+                .build()
+            superState = superState.buildUpon()
+                .setPlaylist(
+                    superState.timeline,
+                    superState.currentTracks,
+                    metadataWithLyric
                 )
                 .build()
         }
@@ -361,6 +389,21 @@ class EndedWorkaroundPlayer(
         )
         return Futures.immediateVoidFuture()
     }
+
+    override fun handleSeek(
+        mediaItemIndex: Int,
+        positionMs: Long,
+        seekCommand: Int
+    ): ListenableFuture<*> {
+        val prefs = PreferenceManager.getDefaultSharedPreferences(context)
+        val alwaysSkipPrevious = prefs.getBooleanStrict("always_skip_previous", false)
+        if (seekCommand == Player.COMMAND_SEEK_TO_PREVIOUS && alwaysSkipPrevious) {
+            player.seekToPreviousMediaItem()
+            return Futures.immediateVoidFuture()
+        }
+        return super.handleSeek(mediaItemIndex, positionMs, seekCommand)
+    }
+
 
 
     /**

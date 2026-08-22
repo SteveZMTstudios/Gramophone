@@ -87,18 +87,18 @@ jobs:
           API_HASH: ${{ secrets.TG_APP_HASH }}
           BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
 
-      - name: Upload files to Telegram
-        if: github.event_name != 'pull_request'
-        uses: xz-dev/TelegramFileUploader@v1.1.1
-        with:
-          to-who: ${{ secrets.TG_CHAT_ID }}
-          message: ${{ env.RANDOM_QUOTE }}
-          files: |
-            ${{ env.APK_FILE }}
-        env:
-          API_ID: ${{ secrets.TG_APP_ID }}
-          API_HASH: ${{ secrets.TG_APP_HASH }}
-          BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+      # - name: Upload files to Telegram
+      #   if: github.event_name != 'pull_request'
+      #   uses: xz-dev/TelegramFileUploader@v1.1.1
+      #   with:
+      #     to-who: ${{ secrets.TG_CHAT_ID }}
+      #     message: ${{ env.RANDOM_QUOTE }}
+      #     files: |
+      #       ${{ env.APK_FILE }}
+      #   env:
+      #     API_ID: ${{ secrets.TG_APP_ID }}
+      #     API_HASH: ${{ secrets.TG_APP_HASH }}
+      #     BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
 
       - name: Upload apk
         if: github.event_name == 'pull_request'

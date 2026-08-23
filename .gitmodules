@@ -1,6 +1,6 @@
 [submodule "media3"]
 	path = media3
-	url = https://github.com/nift4/media
+	url = https://github.com/SteveZMTstudios/media
 	branch = gramophone
 [submodule "hificore/src/main/cpp/libusb-cmake"]
 	path = hificore/src/main/cpp/libusb-cmake

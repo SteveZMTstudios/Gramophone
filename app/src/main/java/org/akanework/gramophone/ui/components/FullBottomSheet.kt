@@ -259,7 +259,7 @@ class FullBottomSheet
     private val bottomSheetFullTitle: TextView
     private val bottomSheetFullSubtitle: TextView
     private val bottomSheetFullControllerButton: MaterialButton
-    private val bottomSheetFullControllerButtonBg: ImageView
+    private val bottomSheetFullControllerButtonBg: ImageView?
     private val bottomSheetFullNextButton: MaterialButton
     private val bottomSheetFullPreviousButton: MaterialButton
     private val bottomSheetFullDuration: TextView
@@ -792,17 +792,18 @@ class FullBottomSheet
     }
 
     private fun startButtonRotation() {
+        val bg = bottomSheetFullControllerButtonBg ?: return
         if (!rotateCookieButton || instance?.isPlaying != true) return
         if (buttonRotationAnimator == null) {
             buttonRotationAnimator = ValueAnimator.ofFloat(
-                bottomSheetFullControllerButtonBg.rotation,
-                bottomSheetFullControllerButtonBg.rotation + 360f
+                bg.rotation,
+                bg.rotation + 360f
             ).apply {
                 duration = 36000L
                 repeatCount = ValueAnimator.INFINITE
                 interpolator = LinearInterpolator()
                 addUpdateListener { animator ->
-                    bottomSheetFullControllerButtonBg.rotation = animator.animatedValue as Float
+                    bg.rotation = animator.animatedValue as Float
                 }
                 start()
             }
@@ -815,7 +816,7 @@ class FullBottomSheet
         buttonRotationAnimator?.cancel()
         buttonRotationAnimator = null
         if (reset) {
-            bottomSheetFullControllerButtonBg.rotation = 0f
+            bottomSheetFullControllerButtonBg?.rotation = 0f
         }
     }
 
@@ -1229,13 +1230,13 @@ class FullBottomSheet
         }
 
         val secondaryContainerTransition = ValueAnimator.ofArgb(
-            bottomSheetFullControllerButtonBg.imageTintList?.defaultColor
+            bottomSheetFullControllerButtonBg?.imageTintList?.defaultColor
                 ?: MaterialColors.getColor(ctx, com.google.android.material.R.attr.colorSecondaryContainer, -1),
             colors.secondaryContainer
         ).apply {
             duration = BACKGROUND_COLOR_TRANSITION_SEC
             addUpdateListener {
-                bottomSheetFullControllerButtonBg.imageTintList = ColorStateList.valueOf(it.animatedValue as Int)
+                bottomSheetFullControllerButtonBg?.imageTintList = ColorStateList.valueOf(it.animatedValue as Int)
             }
         }
 
@@ -1335,7 +1336,7 @@ class FullBottomSheet
             bottomSheetFullLyricView.setBackgroundColor(colors.backgroundProcessed)
             bottomSheetFullTitle.setTextColor(colors.primary)
             bottomSheetFullSubtitle.setTextColor(colors.secondary)
-            bottomSheetFullControllerButtonBg.imageTintList = ColorStateList.valueOf(colors.secondaryContainer)
+            bottomSheetFullControllerButtonBg?.imageTintList = ColorStateList.valueOf(colors.secondaryContainer)
             bottomSheetFullControllerButton.iconTint = ColorStateList.valueOf(colors.onSecondaryContainer)
 
             bottomSheetFullSlider.thumbTintList = ColorStateList.valueOf(colors.primary)
@@ -1517,11 +1518,11 @@ class FullBottomSheet
                     wrappedContext ?: context,
                     R.drawable.play_anim
                 )
-            bottomSheetFullControllerButtonBg.setImageDrawable(
+            bottomSheetFullControllerButtonBg?.setImageDrawable(
                 AppCompatResources.getDrawable(context, R.drawable.bg_play_anim)
             )
             bottomSheetFullControllerButton.icon.startAnimation()
-            bottomSheetFullControllerButtonBg.drawable.startAnimation()
+            bottomSheetFullControllerButtonBg?.drawable?.startAnimation()
             bottomSheetFullControllerButton.setTag(R.id.play_next, 1)
         }
         if (!isUserTracking) {
@@ -1544,11 +1545,11 @@ class FullBottomSheet
                     wrappedContext ?: context,
                     R.drawable.pause_anim
                 )
-            bottomSheetFullControllerButtonBg.setImageDrawable(
+            bottomSheetFullControllerButtonBg?.setImageDrawable(
                 AppCompatResources.getDrawable(context, R.drawable.bg_pause_anim)
             )
             bottomSheetFullControllerButton.icon.startAnimation()
-            bottomSheetFullControllerButtonBg.drawable.startAnimation()
+            bottomSheetFullControllerButtonBg?.drawable?.startAnimation()
             bottomSheetFullControllerButton.setTag(R.id.play_next, 2)
             bottomSheetFullCover.stopRotation()
             stopButtonRotation()

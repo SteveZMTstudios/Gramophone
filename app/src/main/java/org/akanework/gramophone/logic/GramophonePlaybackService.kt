@@ -340,135 +340,15 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         )
         setForegroundServiceTimeoutMs(120000)
         setShowNotificationForEmptyPlayer(SHOW_NOTIFICATION_FOR_EMPTY_PLAYER_AFTER_STOP_OR_ERROR)
-        nm.createNotificationChannel(
-            NotificationChannelCompat.Builder(
-                NOTIFY_CHANNEL_ID, NotificationManagerCompat.IMPORTANCE_HIGH
-            ).apply {
-                setName(getString(R.string.error_in_bg))
-                setVibrationEnabled(true)
-                setVibrationPattern(longArrayOf(0L, 200L))
-                setLightsEnabled(false)
-                setShowBadge(false)
-                setSound(null, null)
-            }.build()
-        )
+        createErrorNotificationChannel()
 
-        customCommands =
-            listOf(
-                CommandButton.Builder(CommandButton.ICON_SHUFFLE_OFF) // shuffle currently disabled, click will enable
-                    .setDisplayName(getString(R.string.shuffle))
-                    .setPlayerCommand(Player.COMMAND_SET_SHUFFLE_MODE, true)
-                    .build(),
-                CommandButton.Builder(CommandButton.ICON_SHUFFLE_ON) // shuffle currently enabled, click will disable
-                    .setDisplayName(getString(R.string.shuffle))
-                    .setPlayerCommand(Player.COMMAND_SET_SHUFFLE_MODE, false)
-                    .build(),
-                CommandButton.Builder(CommandButton.ICON_REPEAT_OFF) // repeat currently disabled, click will repeat all
-                    .setDisplayName(getString(R.string.repeat_mode))
-                    .setPlayerCommand(Player.COMMAND_SET_REPEAT_MODE, Player.REPEAT_MODE_ALL)
-                    .build(),
-                CommandButton.Builder(CommandButton.ICON_REPEAT_ALL) // repeat all currently enabled, click will repeat one
-                    .setDisplayName(getString(R.string.repeat_mode))
-                    .setPlayerCommand(Player.COMMAND_SET_REPEAT_MODE, Player.REPEAT_MODE_ONE)
-                    .build(),
-                CommandButton.Builder(CommandButton.ICON_REPEAT_ONE) // repeat one currently enabled, click will disable
-                    .setDisplayName(getString(R.string.repeat_mode))
-                    .setPlayerCommand(Player.COMMAND_SET_REPEAT_MODE, Player.REPEAT_MODE_OFF)
-                    .build(),
-                CommandButton.Builder(CommandButton.ICON_HEART_UNFILLED) // not favorite, click will favorite
-                    .setDisplayName(getString(R.string.favorite))
-                    .setSessionCommand(SessionCommand(SessionCommand.COMMAND_CODE_SESSION_SET_RATING), HeartRating(true))
-                    .build(),
-                CommandButton.Builder(CommandButton.ICON_HEART_FILLED) // favorite, click will unfavorite
-                    .setDisplayName(getString(R.string.unfavorite))
-                    .setSessionCommand(SessionCommand(SessionCommand.COMMAND_CODE_SESSION_SET_RATING), HeartRating(false))
-                    .build(),
-            )
-        afFormatTracker = AfFormatTracker(this, playbackHandler, handler)
-        afFormatTracker.formatChangedCallback = { format, period ->
-            if (period != null) {
-                handler.post {
-                    val currentPeriod = endedWorkaroundPlayer?.exoPlayer?.currentPeriodIndex
-                        ?.takeIf { it != C.INDEX_UNSET && (endedWorkaroundPlayer?.exoPlayer
-                            ?.currentTimeline?.periodCount ?: 0) > it }?.let {
-                                endedWorkaroundPlayer!!.exoPlayer.currentTimeline
-                                    .getUidOfPeriod(it) }
-                    if (currentPeriod != period) {
-                        if (format != null) {
-                            pendingAfTrackFormats[period] = format
-                        } else {
-                            pendingAfTrackFormats.remove(period)
-                        }
-                    } else {
-                        afTrackFormat = format?.let { period to it }
-                        mediaSession?.broadcastCustomCommand(
-                            SessionCommand(SERVICE_GET_AUDIO_FORMAT, Bundle.EMPTY),
-                            Bundle.EMPTY
-                        )
-                    }
-                }
-            } else {
-                Log.e(TAG, "mediaPeriodId is NULL in formatChangedCallback!!")
-            }
-        }
+        customCommands = initCustomCommands()
+        afFormatTracker = initAfFormatTracker()
         rgAp = ReplayGainAudioProcessor()
         prefs.registerOnSharedPreferenceChangeListener(this)
         onSharedPreferenceChanged(prefs, null) // read initial values
-        val player = EndedWorkaroundPlayer(
-            this,
-            exoPlayer = ExoPlayer.Builder(
-                this,
-                GramophoneRenderFactory(
-                    this, rgAp, this::onAudioSinkInputFormatChanged,
-                    afFormatTracker::setAudioSink
-                )
-                    .setEnableHighResolutionPcmOutput(true)
-                    .setEnableDecoderFallback(true)
-                    .setEnableAudioOutputPlaybackParameters(true)
-                    .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON),
-                GramophoneMediaSourceFactory(
-                    DefaultDataSource.Factory(this),
-                    GramophoneExtractorsFactory().also {
-                        it.setConstantBitrateSeekingEnabled(true)
-                        it.setMp3ExtractorFlags(Mp3Extractor.FLAG_ENABLE_INDEX_SEEKING)
-                    })
-            )
-                .setWakeMode(C.WAKE_MODE_LOCAL)
-                .setAudioAttributes(
-                    AudioAttributes
-                        .Builder()
-                        .setUsage(C.USAGE_MEDIA)
-                        .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
-                        .build(), true
-                )
-                .setHandleAudioBecomingNoisy(true)
-                .setTrackSelector(DefaultTrackSelector(this).apply {
-                    setParameters(
-                        buildUponParameters()
-                        .setAllowInvalidateSelectionsOnRendererCapabilitiesChange(true)
-                        .setAudioOffloadPreferences(
-                            TrackSelectionParameters.AudioOffloadPreferences.Builder()
-                                .apply {
-                                    val config =
-                                        prefs.getStringStrict("offload", "0")?.toIntOrNull()
-                                    if (config != null && config > 0 && Flags.OFFLOAD) {
-                                        rgAp.setOffloadEnabled(true)
-                                        setAudioOffloadMode(TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_ENABLED)
-                                        setIsGaplessSupportRequired(config == 2)
-                                    }
-                                }
-                                .build()))
-                })
-                .setPlaybackLooper(internalPlaybackThread.looper)
-                .build(),
-            { lyrics },
-            queueBoard = qb,
-            getNotificationLyric = { lastSentNotificationLyric }
-        )
-        player.exoPlayer.addAnalyticsListener(EventLogger())
-        player.exoPlayer.addAnalyticsListener(afFormatTracker)
-        player.exoPlayer.addAnalyticsListener(this)
-        player.exoPlayer.setShuffleOrder(CircularShuffleOrder(player, 0, 0, Random.nextLong()))
+
+        val player = buildEndedWorkaroundPlayer()
         lastPlayedManager = LastPlayedManager(this, player)
         lastPlayedManager.allowSavingState = false
         libraryTreeLoader = LibraryTreeLoader(
@@ -478,109 +358,19 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
             prefs
         )
 
-        mediaSession =
-            MediaLibrarySession
-                .Builder(this, player, this)
-                // CacheBitmapLoader is required for MeiZuLyricsMediaNotificationProvider
-                .setBitmapLoader(CacheBitmapLoader(object : BitmapLoader {
-                    // Coil-based bitmap loader to reuse Coil's caching and to make sure we use
-                    // the same cover art as the rest of the app, ie MediaStore's cover
-
-                    private val limit by lazy { MediaSession.getBitmapDimensionLimit(this@GramophonePlaybackService) }
-
-                    // the suppression is correct, we want identity of the byte array as it will
-                    // stay the same over one song's lifetime
-                    @Suppress("KotlinArrayHashCode")
-                    override fun decodeBitmap(data: ByteArray): ListenableFuture<Bitmap> {
-                        return CallbackToFutureAdapter.getFuture { completer ->
-                            imageLoader.enqueue(
-                                ImageRequest.Builder(this@GramophonePlaybackService)
-                                    .data(data)
-                                    .memoryCacheKey(data.hashCode().toString())
-                                    .size(limit, limit)
-                                    .allowHardware(false)
-                                    .target(
-                                        onStart = { _ ->
-                                            // We don't need or want a placeholder.
-                                        },
-                                        onSuccess = { result ->
-                                            completer.set((result as BitmapImage).bitmap)
-                                        },
-                                        onError = { _ ->
-                                            completer.setException(
-                                                Exception(
-                                                    "coil onError called for byte array"
-                                                )
-                                            )
-                                        }
-                                    )
-                                    .build())
-                                .also {
-                                    completer.addCancellationListener(
-                                        { it.dispose() },
-                                        mainExecutor
-                                    )
-                                }
-                            "coil load for ${data.hashCode()}"
-                        }
-                    }
-
-                    override fun loadBitmap(
-                        uri: Uri
-                    ): ListenableFuture<Bitmap> {
-                        return CallbackToFutureAdapter.getFuture { completer ->
-                            imageLoader.enqueue(
-                                ImageRequest.Builder(this@GramophonePlaybackService)
-                                    .data(uri)
-                                    .size(limit, limit)
-                                    .allowHardware(false)
-                                    .target(
-                                        onStart = { _ ->
-                                            // We don't need or want a placeholder.
-                                        },
-                                        onSuccess = { result ->
-                                            completer.set((result as BitmapImage).bitmap)
-                                        },
-                                        onError = { _ ->
-                                            completer.setException(
-                                                Exception(
-                                                    "coil onError called" +
-                                                            " (normal if no album art exists)"
-                                                )
-                                            )
-                                        }
-                                    )
-                                    .build())
-                                .also {
-                                    completer.addCancellationListener(
-                                        { it.dispose() },
-                                        mainExecutor
-                                    )
-                                }
-                            "coil load for $uri"
-                        }
-                    }
-
-                    override fun supportsMimeType(mimeType: String): Boolean {
-                        return isBitmapFactorySupportedMimeType(mimeType)
-                    }
-
-                    override fun loadBitmapFromMetadata(metadata: MediaMetadata): ListenableFuture<Bitmap>? {
-                        return metadata.artworkUri?.let { loadBitmap(it) }
-                    }
-                }))
-                .setSessionActivity(
-                    PendingIntent.getActivity(
-                        this,
-                        PENDING_INTENT_SESSION_ID,
-                        Intent(this, MainActivity::class.java),
-                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-                    )
+        mediaSession = MediaLibrarySession.Builder(this, player, this)
+            .setBitmapLoader(createMediaSessionBitmapLoader())
+            .setSessionActivity(
+                PendingIntent.getActivity(
+                    this,
+                    PENDING_INTENT_SESSION_ID,
+                    Intent(this, MainActivity::class.java),
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
                 )
-                .setSystemUiPlaybackResumptionOptIn(Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
-                // Workaround for AA bug where content cannot be scrolled (androidx/media#2192)
-                .setPeriodicPositionUpdateEnabled(false)
-                .build()
+            )
+            .setSystemUiPlaybackResumptionOptIn(Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+            .setPeriodicPositionUpdateEnabled(false)
+            .build()
         addSession(mediaSession!!)
         controller = MediaBrowser.Builder(this, mediaSession!!.token).buildAsync().get()
         controller!!.addListener(this)
@@ -718,88 +508,20 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         rating: Rating
     ): ListenableFuture<SessionResult> {
         if (rating !is HeartRating) {
-            return Futures.immediateFuture(SessionResult(
-                SessionResult.RESULT_ERROR_BAD_VALUE))
+            return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE))
         }
         val completion = SettableFuture.create<SessionResult>()
         lifecycleScope.launch(Dispatchers.Default) {
             val item = gramophoneApplication.reader.songListFlow.map {
-                it.find { s -> s.mediaId == mediaId } }.first()
-            if (item == null) {
-                completion.set(SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE))
-                return@launch
-            }
-            val song = Entry.ofMediaItem(item)
+                it.find { s -> s.mediaId == mediaId }
+            }.first()
+            val song = item?.let { Entry.ofMediaItem(it) }
             if (song == null) {
                 completion.set(SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE))
                 return@launch
             }
-            val uriIn = gramophoneApplication.reader.playlistListFlow.map { it.find { p ->
-                p is Favorite } }.first()?.id?.let {
-                ContentUris.withAppendedId(@Suppress("deprecation")
-                MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI, it)
-            }
-            val token = if (uriIn != null) {
-                MediaStoreCompat.needRequestBytesWrite(this@GramophonePlaybackService,
-                    uriIn)
-            } else {
-                MediaStoreCompat.needRequestCreate(this@GramophonePlaybackService,
-                    ItemManipulator.getDefaultPlaylistFile(
-                        ItemManipulator.FAVORITES).path)
-            }
-            var error: Exception? = null
-            if (token == null) {
-                try {
-                    val uri = uriIn ?: ItemManipulator.createPlaylist(
-                        this@GramophonePlaybackService, ItemManipulator
-                            .getDefaultPlaylistFile(ItemManipulator.FAVORITES))
-                    val readback = if (uriIn != null) ItemManipulator.readbackPlaylist(
-                        this@GramophonePlaybackService, uri) else
-                            PlaylistSerializer.Playlist.create()
-                    val newSongs = if (rating.isHeart) {
-                        readback.entries + song
-                    } else {
-                        readback.entries.filter { !song.fuzzyEquals(it) }
-                    }
-                    ItemManipulator.setPlaylistContent(this@GramophonePlaybackService, uri,
-                        readback.copy(entries = newSongs), uriIn == null)
-                } catch (e: Exception) {
-                    Log.e(TAG, "failed to set $rating on $mediaId", e)
-                    error = e
-                }
-            }
-            if (token == null && error == null) {
-                completion.set(SessionResult(SessionResult.RESULT_SUCCESS))
-            } else {
-                if (!supportsNotificationPermission() || hasNotificationPermission()) {
-                    @SuppressLint("MissingPermission") // false positive
-                    nm.notify(FAVE_ID, NotificationCompat.Builder(
-                        this@GramophonePlaybackService, NOTIFY_CHANNEL_ID).apply {
-                        setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                        setAutoCancel(true)
-                        setCategory(NotificationCompat.CATEGORY_ERROR)
-                        setSmallIcon(R.drawable.ic_error)
-                        setContentTitle(this@GramophonePlaybackService.getString(R.string.favorite_failed_title))
-                        setContentText(this@GramophonePlaybackService.getString(R.string.favorite_failed_text))
-                        setContentIntent(
-                            PendingIntent.getActivity(
-                                this@GramophonePlaybackService,
-                                PENDING_INTENT_FAVE_ID,
-                                Intent(this@GramophonePlaybackService, MainActivity::class.java)
-                                    .putExtra(MainActivity.FAVORITE_ENTRY, song)
-                                    .putExtra(MainActivity.FAVORITE_STATE, rating.isHeart),
-                                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-                            )
-                        )
-                        setVibrate(longArrayOf(0L, 200L))
-                        setLights(0, 0, 0)
-                        setBadgeIconType(NotificationCompat.BADGE_ICON_NONE)
-                        setSound(null)
-                    }.build())
-                }
-                completion.set(SessionResult(SessionError.ERROR_IO))
-                return@launch
-            }
+            val success = updateFavoritePlaylist(song, rating.isHeart)
+            completion.set(SessionResult(if (success) SessionResult.RESULT_SUCCESS else SessionError.ERROR_IO))
         }
         return completion
     }
@@ -822,36 +544,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         val newIsHeart = !currentIsHeart
         lifecycleScope.launch(Dispatchers.Default) {
             val song = Entry.ofMediaItem(item) ?: return@launch
-            val uriIn = gramophoneApplication.reader.playlistListFlow.map { it.find { p ->
-                p is Favorite } }.first()?.id?.let {
-                ContentUris.withAppendedId(@Suppress("deprecation")
-                MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI, it)
-            }
-            val token = if (uriIn != null) {
-                MediaStoreCompat.needRequestBytesWrite(this@GramophonePlaybackService, uriIn)
-            } else {
-                MediaStoreCompat.needRequestCreate(this@GramophonePlaybackService,
-                    ItemManipulator.getDefaultPlaylistFile(ItemManipulator.FAVORITES).path)
-            }
-            if (token == null) {
-                try {
-                    val uri = uriIn ?: ItemManipulator.createPlaylist(
-                        this@GramophonePlaybackService, ItemManipulator
-                            .getDefaultPlaylistFile(ItemManipulator.FAVORITES))
-                    val readback = if (uriIn != null) ItemManipulator.readbackPlaylist(
-                        this@GramophonePlaybackService, uri) else
-                            PlaylistSerializer.Playlist.create()
-                    val newSongs = if (newIsHeart) {
-                        readback.entries + song
-                    } else {
-                        readback.entries.filter { !song.fuzzyEquals(it) }
-                    }
-                    ItemManipulator.setPlaylistContent(this@GramophonePlaybackService, uri,
-                        readback.copy(entries = newSongs), uriIn == null)
-                } catch (e: Exception) {
-                    Log.e(TAG, "failed to toggle favorite on ${item.mediaId}", e)
-                }
-            }
+            updateFavoritePlaylist(song, newIsHeart)
             withContext(Dispatchers.Main) {
                 val updatedItem = item.buildUpon().setMediaMetadata(
                     item.mediaMetadata.buildUpon()
@@ -863,6 +556,254 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                 CardWidgetProvider.update(this@GramophonePlaybackService)
             }
         }
+    }
+
+    private suspend fun updateFavoritePlaylist(song: Entry, isHeart: Boolean): Boolean {
+        val uriIn = gramophoneApplication.reader.playlistListFlow.map { it.find { p -> p is Favorite } }.first()?.id?.let {
+            ContentUris.withAppendedId(@Suppress("deprecation") MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI, it)
+        }
+        val token = if (uriIn != null) {
+            MediaStoreCompat.needRequestBytesWrite(this@GramophonePlaybackService, uriIn)
+        } else {
+            MediaStoreCompat.needRequestCreate(
+                this@GramophonePlaybackService,
+                ItemManipulator.getDefaultPlaylistFile(ItemManipulator.FAVORITES).path
+            )
+        }
+        if (token != null) {
+            notifyFavoriteError(song, isHeart)
+            return false
+        }
+        return try {
+            val uri = uriIn ?: ItemManipulator.createPlaylist(
+                this@GramophonePlaybackService,
+                ItemManipulator.getDefaultPlaylistFile(ItemManipulator.FAVORITES)
+            )
+            val readback = if (uriIn != null) {
+                ItemManipulator.readbackPlaylist(this@GramophonePlaybackService, uri)
+            } else {
+                PlaylistSerializer.Playlist.create()
+            }
+            val newSongs = if (isHeart) {
+                readback.entries + song
+            } else {
+                readback.entries.filter { !song.fuzzyEquals(it) }
+            }
+            ItemManipulator.setPlaylistContent(this@GramophonePlaybackService, uri, readback.copy(entries = newSongs), uriIn == null)
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "failed to update favorite for ${song.title}", e)
+            notifyFavoriteError(song, isHeart)
+            false
+        }
+    }
+
+    private fun notifyFavoriteError(song: Entry, isHeart: Boolean) {
+        if (!supportsNotificationPermission() || hasNotificationPermission()) {
+            @SuppressLint("MissingPermission")
+            nm.notify(
+                FAVE_ID,
+                NotificationCompat.Builder(this, NOTIFY_CHANNEL_ID).apply {
+                    setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                    setAutoCancel(true)
+                    setCategory(NotificationCompat.CATEGORY_ERROR)
+                    setSmallIcon(R.drawable.ic_error)
+                    setContentTitle(getString(R.string.favorite_failed_title))
+                    setContentText(getString(R.string.favorite_failed_text))
+                    setContentIntent(
+                        PendingIntent.getActivity(
+                            this@GramophonePlaybackService,
+                            PENDING_INTENT_FAVE_ID,
+                            Intent(this@GramophonePlaybackService, MainActivity::class.java)
+                                .putExtra(MainActivity.FAVORITE_ENTRY, song)
+                                .putExtra(MainActivity.FAVORITE_STATE, isHeart),
+                            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                        )
+                    )
+                    setVibrate(longArrayOf(0L, 200L))
+                    setLights(0, 0, 0)
+                    setBadgeIconType(NotificationCompat.BADGE_ICON_NONE)
+                    setSound(null)
+                }.build()
+            )
+        }
+    }
+
+    private fun createErrorNotificationChannel() {
+        nm.createNotificationChannel(
+            NotificationChannelCompat.Builder(
+                NOTIFY_CHANNEL_ID, NotificationManagerCompat.IMPORTANCE_HIGH
+            ).apply {
+                setName(getString(R.string.error_in_bg))
+                setVibrationEnabled(true)
+                setVibrationPattern(longArrayOf(0L, 200L))
+                setLightsEnabled(false)
+                setShowBadge(false)
+                setSound(null, null)
+            }.build()
+        )
+    }
+
+    private fun initCustomCommands(): List<CommandButton> = listOf(
+        CommandButton.Builder(CommandButton.ICON_SHUFFLE_OFF)
+            .setDisplayName(getString(R.string.shuffle))
+            .setPlayerCommand(Player.COMMAND_SET_SHUFFLE_MODE, true)
+            .build(),
+        CommandButton.Builder(CommandButton.ICON_SHUFFLE_ON)
+            .setDisplayName(getString(R.string.shuffle))
+            .setPlayerCommand(Player.COMMAND_SET_SHUFFLE_MODE, false)
+            .build(),
+        CommandButton.Builder(CommandButton.ICON_REPEAT_OFF)
+            .setDisplayName(getString(R.string.repeat_mode))
+            .setPlayerCommand(Player.COMMAND_SET_REPEAT_MODE, Player.REPEAT_MODE_ALL)
+            .build(),
+        CommandButton.Builder(CommandButton.ICON_REPEAT_ALL)
+            .setDisplayName(getString(R.string.repeat_mode))
+            .setPlayerCommand(Player.COMMAND_SET_REPEAT_MODE, Player.REPEAT_MODE_ONE)
+            .build(),
+        CommandButton.Builder(CommandButton.ICON_REPEAT_ONE)
+            .setDisplayName(getString(R.string.repeat_mode))
+            .setPlayerCommand(Player.COMMAND_SET_REPEAT_MODE, Player.REPEAT_MODE_OFF)
+            .build(),
+        CommandButton.Builder(CommandButton.ICON_HEART_UNFILLED)
+            .setDisplayName(getString(R.string.favorite))
+            .setSessionCommand(SessionCommand(SessionCommand.COMMAND_CODE_SESSION_SET_RATING), HeartRating(true))
+            .build(),
+        CommandButton.Builder(CommandButton.ICON_HEART_FILLED)
+            .setDisplayName(getString(R.string.unfavorite))
+            .setSessionCommand(SessionCommand(SessionCommand.COMMAND_CODE_SESSION_SET_RATING), HeartRating(false))
+            .build(),
+    )
+
+    private fun initAfFormatTracker(): AfFormatTracker {
+        return AfFormatTracker(this, playbackHandler, handler).apply {
+            formatChangedCallback = { format, period ->
+                if (period != null) {
+                    handler.post {
+                        val currentPeriod = endedWorkaroundPlayer?.exoPlayer?.currentPeriodIndex
+                            ?.takeIf { it != C.INDEX_UNSET && (endedWorkaroundPlayer?.exoPlayer?.currentTimeline?.periodCount ?: 0) > it }
+                            ?.let { endedWorkaroundPlayer!!.exoPlayer.currentTimeline.getUidOfPeriod(it) }
+                        if (currentPeriod != period) {
+                            if (format != null) pendingAfTrackFormats[period] = format
+                            else pendingAfTrackFormats.remove(period)
+                        } else {
+                            afTrackFormat = format?.let { period to it }
+                            mediaSession?.broadcastCustomCommand(
+                                SessionCommand(SERVICE_GET_AUDIO_FORMAT, Bundle.EMPTY),
+                                Bundle.EMPTY
+                            )
+                        }
+                    }
+                } else {
+                    Log.e(TAG, "mediaPeriodId is NULL in formatChangedCallback!!")
+                }
+            }
+        }
+    }
+
+    private fun buildEndedWorkaroundPlayer(): EndedWorkaroundPlayer {
+        val player = EndedWorkaroundPlayer(
+            this,
+            exoPlayer = ExoPlayer.Builder(
+                this,
+                GramophoneRenderFactory(
+                    this, rgAp, this::onAudioSinkInputFormatChanged,
+                    afFormatTracker::setAudioSink
+                )
+                    .setEnableHighResolutionPcmOutput(true)
+                    .setEnableDecoderFallback(true)
+                    .setEnableAudioOutputPlaybackParameters(true)
+                    .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON),
+                GramophoneMediaSourceFactory(
+                    DefaultDataSource.Factory(this),
+                    GramophoneExtractorsFactory().also {
+                        it.setConstantBitrateSeekingEnabled(true)
+                        it.setMp3ExtractorFlags(Mp3Extractor.FLAG_ENABLE_INDEX_SEEKING)
+                    })
+            )
+                .setWakeMode(C.WAKE_MODE_LOCAL)
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(C.USAGE_MEDIA)
+                        .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+                        .build(), true
+                )
+                .setHandleAudioBecomingNoisy(true)
+                .setTrackSelector(DefaultTrackSelector(this).apply {
+                    setParameters(
+                        buildUponParameters()
+                            .setAllowInvalidateSelectionsOnRendererCapabilitiesChange(true)
+                            .setAudioOffloadPreferences(
+                                TrackSelectionParameters.AudioOffloadPreferences.Builder()
+                                    .apply {
+                                        val config = prefs.getStringStrict("offload", "0")?.toIntOrNull()
+                                        if (config != null && config > 0 && Flags.OFFLOAD) {
+                                            rgAp.setOffloadEnabled(true)
+                                            setAudioOffloadMode(TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_ENABLED)
+                                            setIsGaplessSupportRequired(config == 2)
+                                        }
+                                    }
+                                    .build()))
+                })
+                .setPlaybackLooper(internalPlaybackThread.looper)
+                .build(),
+            { lyrics },
+            queueBoard = qb,
+            getNotificationLyric = { lastSentNotificationLyric }
+        )
+        player.exoPlayer.addAnalyticsListener(EventLogger())
+        player.exoPlayer.addAnalyticsListener(afFormatTracker)
+        player.exoPlayer.addAnalyticsListener(this)
+        player.exoPlayer.setShuffleOrder(CircularShuffleOrder(player, 0, 0, Random.nextLong()))
+        return player
+    }
+
+    private fun createMediaSessionBitmapLoader(): CacheBitmapLoader {
+        return CacheBitmapLoader(object : BitmapLoader {
+            private val limit by lazy { MediaSession.getBitmapDimensionLimit(this@GramophonePlaybackService) }
+
+            @Suppress("KotlinArrayHashCode")
+            override fun decodeBitmap(data: ByteArray): ListenableFuture<Bitmap> {
+                return CallbackToFutureAdapter.getFuture { completer ->
+                    imageLoader.enqueue(
+                        ImageRequest.Builder(this@GramophonePlaybackService)
+                            .data(data)
+                            .memoryCacheKey(data.hashCode().toString())
+                            .size(limit, limit)
+                            .allowHardware(false)
+                            .target(
+                                onStart = {},
+                                onSuccess = { result -> completer.set((result as BitmapImage).bitmap) },
+                                onError = { completer.setException(Exception("coil onError called for byte array")) }
+                            )
+                            .build())
+                        .also { completer.addCancellationListener({ it.dispose() }, mainExecutor) }
+                    "coil load for ${data.hashCode()}"
+                }
+            }
+
+            override fun loadBitmap(uri: Uri): ListenableFuture<Bitmap> {
+                return CallbackToFutureAdapter.getFuture { completer ->
+                    imageLoader.enqueue(
+                        ImageRequest.Builder(this@GramophonePlaybackService)
+                            .data(uri)
+                            .size(limit, limit)
+                            .allowHardware(false)
+                            .target(
+                                onStart = {},
+                                onSuccess = { result -> completer.set((result as BitmapImage).bitmap) },
+                                onError = { completer.setException(Exception("coil onError called (normal if no album art exists)")) }
+                            )
+                            .build())
+                        .also { completer.addCancellationListener({ it.dispose() }, mainExecutor) }
+                    "coil load for $uri"
+                }
+            }
+
+            override fun supportsMimeType(mimeType: String): Boolean = isBitmapFactorySupportedMimeType(mimeType)
+            override fun loadBitmapFromMetadata(metadata: MediaMetadata): ListenableFuture<Bitmap>? =
+                metadata.artworkUri?.let { loadBitmap(it) }
+        })
     }
 
 
@@ -966,11 +907,23 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
     }
 
     override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences, key: String?) {
-        var restart = false
+        handleLyricsPreference(key)
+        val restart = handleReplayGainPreference(key)
+        if (restart) {
+            controller?.stop()
+            controller?.prepare()
+        }
+    }
+
+    private fun handleLyricsPreference(key: String?) {
         if (key == null || key == "notification_lyrics" || key == "status_bar_lyrics") {
             scheduleSendingLyrics(false)
             endedWorkaroundPlayer?.invalidatePlayerState()
         }
+    }
+
+    private fun handleReplayGainPreference(key: String?): Boolean {
+        var restart = false
         if (key == null || key == "rg_mode") {
             rgMode = prefs.getStringStrict("rg_mode", "0")!!.toInt()
             restart = !computeRgMode(true)
@@ -991,10 +944,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
             val boostGain = prefs.getIntStrict("rg_boost_gain", 0)
             restart = !rgAp.setBoostGain(boostGain) || restart
         }
-        if (restart) {
-            controller?.stop()
-            controller?.prepare()
-        }
+        return restart
     }
 
     private fun computeRgMode(force: Boolean): Boolean {
@@ -1593,31 +1543,35 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
             sendLyricNow(false)
         }
         if (state == Player.STATE_IDLE) {
-            var changed = false
-            if (afTrackFormat != null) {
-                Log.e(TAG, "leaked track format: $afTrackFormat")
-                afTrackFormat = null
-                changed = true
-            }
-            if (pendingAfTrackFormats.isNotEmpty()) {
-                Log.e(TAG, "leaked pending track formats: $pendingAfTrackFormats")
-                pendingAfTrackFormats.clear()
-            }
-            if (downstreamFormat.isNotEmpty()) {
-                Log.e(TAG, "leaked downstream formats: $downstreamFormat")
-                downstreamFormat.clear()
-                changed = true
-            }
-            if (pendingDownstreamFormat.isNotEmpty()) {
-                Log.e(TAG, "leaked pending downstream formats: $pendingDownstreamFormat")
-                pendingDownstreamFormat.clear()
-            }
-            if (changed) {
-                mediaSession?.broadcastCustomCommand(
-                    SessionCommand(SERVICE_GET_AUDIO_FORMAT, Bundle.EMPTY),
-                    Bundle.EMPTY
-                )
-            }
+            cleanupLeakedFormats()
+        }
+    }
+
+    private fun cleanupLeakedFormats() {
+        var changed = false
+        if (afTrackFormat != null) {
+            Log.e(TAG, "leaked track format: $afTrackFormat")
+            afTrackFormat = null
+            changed = true
+        }
+        if (pendingAfTrackFormats.isNotEmpty()) {
+            Log.e(TAG, "leaked pending track formats: $pendingAfTrackFormats")
+            pendingAfTrackFormats.clear()
+        }
+        if (downstreamFormat.isNotEmpty()) {
+            Log.e(TAG, "leaked downstream formats: $downstreamFormat")
+            downstreamFormat.clear()
+            changed = true
+        }
+        if (pendingDownstreamFormat.isNotEmpty()) {
+            Log.e(TAG, "leaked pending downstream formats: $pendingDownstreamFormat")
+            pendingDownstreamFormat.clear()
+        }
+        if (changed) {
+            mediaSession?.broadcastCustomCommand(
+                SessionCommand(SERVICE_GET_AUDIO_FORMAT, Bundle.EMPTY),
+                Bundle.EMPTY
+            )
         }
     }
 
@@ -1848,15 +1802,14 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
     private fun getActiveNotificationLyric(): String? {
         val isNotificationLyricsEnabled = prefs.getBooleanStrict("notification_lyrics", false)
         if (!isNotificationLyricsEnabled || isPausedFallback) return null
-        if (controller?.playbackState == Player.STATE_ENDED || controller?.playbackState == Player.STATE_IDLE) return null
+        val state = controller?.playbackState
+        if (state == Player.STATE_ENDED || state == Player.STATE_IDLE) return null
 
         val cPos = (controller?.contentPosition ?: 0).toULong()
-        val lines = syncedLyrics?.text?.filter {
-            it.start <= cPos && !it.isTranslated
-        }
-        val currentLine = lines?.maxByOrNull { it.start } ?: return null
-        if (currentLine.text.isBlank()) return null
-        return currentLine.text
+        val currentLine = syncedLyrics?.text
+            ?.filter { it.start <= cPos && !it.isTranslated }
+            ?.maxByOrNull { it.start } ?: return null
+        return currentLine.text.takeIf { it.isNotBlank() }
     }
 
     private fun scheduleSendingLyrics(new: Boolean) {
@@ -1871,32 +1824,28 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         val isNotificationLyricsEnabled = prefs.getBooleanStrict("notification_lyrics", false)
         val hnw = !LyricWidgetProvider.hasWidget(this)
         if (controller?.isPlaying != true || (!isStatusBarLyricsEnabled && !isNotificationLyricsEnabled && hnw && !hasCardWidget)) return
+
         val cPos = (controller?.contentPosition ?: 0).toULong()
+        val delayMs = computeNextLyricDelayMs(hasCardWidget, hnw, cPos)
+        delayMs?.let { handler.postDelayed(sendLyrics, it) }
+    }
+
+    private fun computeNextLyricDelayMs(hasCardWidget: Boolean, hnw: Boolean, cPos: ULong): Long? {
         val nextUpdate = syncedLyrics?.text?.flatMap { line ->
             if (hnw && line.start <= cPos) listOf() else if (hnw) listOf(line.start) else
                 (line.words?.map { it.timeRange.first }?.filter { it > cPos } ?: listOf())
                     .let { i -> if (line.start > cPos) i + line.start else i }
         }?.minOrNull()
-        val delayMs = if (nextUpdate != null) {
+        return if (nextUpdate != null) {
             val diff = ((nextUpdate - cPos).toLong() / (controller?.playbackParameters?.speed ?: 1f)).toLong()
             if (hasCardWidget) diff.coerceAtMost(1000L).coerceAtLeast(500L) else diff
         } else if (hasCardWidget) {
             1000L
         } else null
-
-        delayMs?.let {
-            handler.postDelayed(sendLyrics, it)
-        }
     }
 
     private fun sendLyricNow(new: Boolean) {
-        if (new) {
-            LyricWidgetProvider.update(this)
-            CardWidgetProvider.update(this)
-        } else {
-            LyricWidgetProvider.adapterUpdate(this)
-            CardWidgetProvider.update(this)
-        }
+        updateWidgetLyrics(new)
         val isStatusBarLyricsEnabled = prefs.getBooleanStrict("status_bar_lyrics", false)
         val highlightedLyric = if (isStatusBarLyricsEnabled && controller?.playWhenReady == true)
             getCurrentLyricIndex(false)?.let {
@@ -1908,22 +1857,36 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
             val notifLyricChanged = lastSentNotificationLyric != notificationLyric
             lastSentHighlightedLyric = highlightedLyric
             lastSentNotificationLyric = notificationLyric
-            handler.post {
-                endedWorkaroundPlayer?.let {
-                    if (notifLyricChanged) {
-                        it.invalidatePlayerState()
-                    }
-                    // This will access the media notification controller's getters. But because
-                    // controller callback ordering is undefined and in practice our service
-                    // controller sometimes gets called first, this would cause us to access a stale
-                    // PlaybackInfo in the media notification controller which causes wrong decision
-                    // for startInForegroundRequired and that leads to crash.
-                    if (Looper.myLooper() != it.applicationLooper)
-                        throw UnsupportedOperationException("wrong looper for triggerNotificationUpdate")
-                    isManualNotificationUpdate = true
-                    triggerNotificationUpdate()
-                    isManualNotificationUpdate = false
+            notifyLyricsUpdated(notifLyricChanged)
+        }
+    }
+
+    private fun updateWidgetLyrics(new: Boolean) {
+        if (new) {
+            LyricWidgetProvider.update(this)
+            CardWidgetProvider.update(this)
+        } else {
+            LyricWidgetProvider.adapterUpdate(this)
+            CardWidgetProvider.update(this)
+        }
+    }
+
+    private fun notifyLyricsUpdated(notifLyricChanged: Boolean) {
+        handler.post {
+            endedWorkaroundPlayer?.let {
+                if (notifLyricChanged) {
+                    it.invalidatePlayerState()
                 }
+                // This will access the media notification controller's getters. But because
+                // controller callback ordering is undefined and in practice our service
+                // controller sometimes gets called first, this would cause us to access a stale
+                // PlaybackInfo in the media notification controller which causes wrong decision
+                // for startInForegroundRequired and that leads to crash.
+                if (Looper.myLooper() != it.applicationLooper)
+                    throw UnsupportedOperationException("wrong looper for triggerNotificationUpdate")
+                isManualNotificationUpdate = true
+                triggerNotificationUpdate()
+                isManualNotificationUpdate = false
             }
         }
     }

@@ -108,96 +108,98 @@ class EndedWorkaroundPlayer(
     }
 
     override fun getState(): State {
-        var superState = super.state
-        if (superState.currentMetadata.artworkUri != null &&
-            superState.currentMetadata.hdArtworkUri != null
-        ) {
-            superState = superState.buildUpon()
-                .setPlaylist(
-                    superState.timeline, superState.currentTracks,
-                    superState.currentMetadata.buildUpon()
-                        .setArtworkUri(superState.currentMetadata.hdArtworkUri)
-                        .setExtras(Bundle(superState.currentMetadata.extras!!).apply {
-                            remove(EXTRA_HD_ARTWORK_URI)
-                        })
-                        .build()
-                )
+        var state = super.state
+        state = applyHdArtwork(state)
+        state = applyNotificationLyrics(state)
+        state = applyOplusLyrics(state)
+        return applyEndedOrDeviceState(state)
+    }
+
+    private fun applyHdArtwork(state: State): State {
+        if (state.currentMetadata.artworkUri != null && state.currentMetadata.hdArtworkUri != null) {
+            val updatedMetadata = state.currentMetadata.buildUpon()
+                .setArtworkUri(state.currentMetadata.hdArtworkUri)
+                .setExtras(Bundle(state.currentMetadata.extras!!).apply {
+                    remove(EXTRA_HD_ARTWORK_URI)
+                })
+                .build()
+            return state.buildUpon()
+                .setPlaylist(state.timeline, state.currentTracks, updatedMetadata)
                 .build()
         }
+        return state
+    }
+
+    private fun applyNotificationLyrics(state: State): State {
         val notifLyric = getNotificationLyric()
         if (!notifLyric.isNullOrBlank()) {
-            val origTitle = superState.currentMetadata.title?.toString() ?: ""
-            val origArtist = superState.currentMetadata.artist?.toString() ?: ""
+            val origTitle = state.currentMetadata.title?.toString() ?: ""
+            val origArtist = state.currentMetadata.artist?.toString() ?: ""
             val subtitle = if (origArtist.isNotBlank() && origTitle.isNotBlank()) {
                 "$origArtist - $origTitle"
             } else {
                 origArtist.ifBlank { origTitle }
             }
-            val metadataWithLyric = superState.currentMetadata.buildUpon()
+            val metadataWithLyric = state.currentMetadata.buildUpon()
                 .setTitle(notifLyric)
                 .setArtist(subtitle)
                 .setDisplayTitle(notifLyric)
                 .setSubtitle(subtitle)
                 .build()
-            superState = superState.buildUpon()
-                .setPlaylist(
-                    superState.timeline,
-                    superState.currentTracks,
-                    metadataWithLyric
-                )
+            return state.buildUpon()
+                .setPlaylist(state.timeline, state.currentTracks, metadataWithLyric)
                 .build()
         }
+        return state
+    }
+
+    private fun applyOplusLyrics(state: State): State {
         if (context.packageName == "com.tencent.qqmusic") {
-            // Oplus uses package name whitelist for their lockscreen lyric feature
-            // (don't use BuildConfig in order to allow late patching of package name, after build)
             val lyric = getLyric()
-            if (lyric != null && lyric is SemanticLyrics.SyncedLyrics) {
-                superState = superState.buildUpon()
-                    .setPlaylist(
-                        superState.timeline, superState.currentTracks,
-                        superState.currentMetadata.buildUpon()
-                            .setExtras((superState.currentMetadata.extras?.let { Bundle(it) }
-                                ?: Bundle()).apply {
-                                putString("lyricInfo", JSONObject().apply {
-                                    put("songName", superState.currentMetadata.title)
-                                    put("artist", superState.currentMetadata.artist)
-                                    // Put lyric hash code into songId as well to be able to reset
-                                    // lyrics if they load late or get changed.
-                                    put(
-                                        "songId", superState.playlist.getOrNull(
-                                            superState.currentMediaItemIndex
-                                        )?.mediaItem?.mediaId
-                                            .toString() + Objects.toIdentityString(lyric)
-                                    )
-                                    // This can parse some odd Netease-specific JSON list or normal
-                                    // LRC without bells and whistles (fwiw, the Netease format is
-                                    // not even better than plain LRC), no word sync as of right now
-                                    put(
-                                        "lyric", lyric.text.joinToString(
-                                            "\n"
-                                        ) {
-                                            val s = it.start.toLong() / 1000
-                                            "[%02d:%02d.%02d]".format(
-                                                s / 60, s % 60,
-                                                (it.start.toLong() % 1000) / 10
-                                            ) + it.text
-                                        })
-                                }.toString())
-                            }).build()
-                    ).build()
+            if (lyric is SemanticLyrics.SyncedLyrics) {
+                val extras = (state.currentMetadata.extras?.let { Bundle(it) } ?: Bundle()).apply {
+                    putString("lyricInfo", buildOplusLyricJson(state, lyric))
+                }
+                val metadata = state.currentMetadata.buildUpon().setExtras(extras).build()
+                return state.buildUpon()
+                    .setPlaylist(state.timeline, state.currentTracks, metadata)
+                    .build()
             }
         }
+        return state
+    }
+
+    private fun buildOplusLyricJson(state: State, lyric: SemanticLyrics.SyncedLyrics): String {
+        return JSONObject().apply {
+            put("songName", state.currentMetadata.title)
+            put("artist", state.currentMetadata.artist)
+            put(
+                "songId",
+                state.playlist.getOrNull(state.currentMediaItemIndex)?.mediaItem?.mediaId.toString() +
+                        Objects.toIdentityString(lyric)
+            )
+            put(
+                "lyric",
+                lyric.text.joinToString("\n") {
+                    val s = it.start.toLong() / 1000
+                    "[%02d:%02d.%02d]".format(s / 60, s % 60, (it.start.toLong() % 1000) / 10) + it.text
+                }
+            )
+        }.toString()
+    }
+
+    private fun applyEndedOrDeviceState(state: State): State {
         if (isEnded) {
-            if (superState.playerError != null) {
+            if (state.playerError != null) {
                 isEnded = false
-                return superState
+                return state
             }
-            return superState.buildUpon().setPlaybackState(STATE_ENDED).setIsLoading(false).build()
+            return state.buildUpon().setPlaybackState(STATE_ENDED).setIsLoading(false).build()
         }
         if (player.currentTimeline.isEmpty) {
-            return superState.buildUpon().setDeviceInfo(remoteDeviceInfo).build()
+            return state.buildUpon().setDeviceInfo(remoteDeviceInfo).build()
         }
-        return superState
+        return state
     }
 
 
@@ -259,42 +261,46 @@ class EndedWorkaroundPlayer(
         if (nextShuffleOrder != null)
             throw IllegalStateException("shuffleFactory was found orphaned")
         if (currentMediaItem?.mediaId == mediaItems[startIndex].mediaId) {
-            val index = currentMediaItemIndex
-            val isLast = mediaItemCount - index == 1
-            cloneQueue(generateQueueId(), title, pinned, original)
-            if (repeatMode != null) super.handleSetRepeatMode(repeatMode)
-            if (shuffleModeEnabled != null) super.handleSetShuffleModeEnabled(shuffleModeEnabled)
-            if (playbackParameters != null) super.handleSetPlaybackParameters(playbackParameters)
-            if (index == 0)
-                super.handleAddMediaItems(0, mediaItems.subList(0, startIndex))
-            else
-                super.handleReplaceMediaItems(
-                    0, index,
-                    mediaItems.subList(0, startIndex)
-                )
-            super.handleReplaceMediaItems(
-                startIndex, startIndex,
-                listOf(mediaItems[startIndex])
+            replaceMediaItemsSeamlessly(
+                mediaItems, startIndex, title, pinned, original,
+                repeatMode, shuffleModeEnabled, playbackParameters
             )
-            if (isLast) {
-                if (mediaItems.size > startIndex + 1)
-                    super.handleAddMediaItems(
-                        Int.MAX_VALUE, mediaItems
-                            .subList(startIndex + 1, mediaItems.size)
-                    )
-            } else
-                super.handleReplaceMediaItems(
-                    startIndex + 1, Int.MAX_VALUE,
-                    if (mediaItems.size > startIndex + 1) mediaItems.subList(
-                        startIndex + 1, mediaItems.size
-                    ) else emptyList()
-                )
         } else {
             setMediaItems(
                 mediaItems, startIndex, C.TIME_UNSET, title, pinned,
                 original, null, false, repeatMode, shuffleModeEnabled,
                 playbackParameters
             )
+        }
+    }
+
+    private fun replaceMediaItemsSeamlessly(
+        mediaItems: List<MediaItem>,
+        startIndex: Int,
+        title: String,
+        pinned: Boolean,
+        original: Boolean,
+        repeatMode: Int?,
+        shuffleModeEnabled: Boolean?,
+        playbackParameters: PlaybackParameters?,
+    ) {
+        val index = currentMediaItemIndex
+        val isLast = mediaItemCount - index == 1
+        cloneQueue(generateQueueId(), title, pinned, original)
+        if (repeatMode != null) super.handleSetRepeatMode(repeatMode)
+        if (shuffleModeEnabled != null) super.handleSetShuffleModeEnabled(shuffleModeEnabled)
+        if (playbackParameters != null) super.handleSetPlaybackParameters(playbackParameters)
+        if (index == 0)
+            super.handleAddMediaItems(0, mediaItems.subList(0, startIndex))
+        else
+            super.handleReplaceMediaItems(0, index, mediaItems.subList(0, startIndex))
+        super.handleReplaceMediaItems(startIndex, startIndex, listOf(mediaItems[startIndex]))
+        if (isLast) {
+            if (mediaItems.size > startIndex + 1)
+                super.handleAddMediaItems(Int.MAX_VALUE, mediaItems.subList(startIndex + 1, mediaItems.size))
+        } else {
+            val tail = if (mediaItems.size > startIndex + 1) mediaItems.subList(startIndex + 1, mediaItems.size) else emptyList()
+            super.handleReplaceMediaItems(startIndex + 1, Int.MAX_VALUE, tail)
         }
     }
 
@@ -308,33 +314,33 @@ class EndedWorkaroundPlayer(
         if (currentQueueId == null && !exoPlayer.currentTimeline.isEmpty)
             throw IllegalStateException("have media items but current title is null, logic bug")
         else if (currentQueueId != null && Flags.MQ_PREVIEW) {
-            queueBoard.addQueue(
-                currentQueueId!!,
-                currentTitle!!,
-                ArrayList<MediaItem>(exoPlayer.mediaItemCount).apply {
-                    for (i in 0..<exoPlayer.mediaItemCount) {
-                        add(exoPlayer.getMediaItemAt(i))
-                    }
-                },
-                exoPlayer.currentMediaItemIndex,
-                exoPlayer.currentPosition,
-                currentIsPinned,
-                currentIsOriginal,
-                repeatMode,
-                if (shuffleModeEnabled) {
-                    CircularShuffleOrder.Persistent(
-                        exoPlayer.shuffleOrder as CircularShuffleOrder
-                    )
-                } else {
-                    null
-                },
-                exoPlayer.playbackState == STATE_ENDED,
-            )
+            saveActiveQueueToBoard()
         }
         currentQueueId = nextQueueId
         currentTitle = nextTitle
         currentIsPinned = nextIsPinned
         currentIsOriginal = nextIsOriginal
+    }
+
+    private fun saveActiveQueueToBoard() {
+        queueBoard.addQueue(
+            currentQueueId!!,
+            currentTitle!!,
+            ArrayList<MediaItem>(exoPlayer.mediaItemCount).apply {
+                for (i in 0..<exoPlayer.mediaItemCount) {
+                    add(exoPlayer.getMediaItemAt(i))
+                }
+            },
+            exoPlayer.currentMediaItemIndex,
+            exoPlayer.currentPosition,
+            currentIsPinned,
+            currentIsOriginal,
+            repeatMode,
+            if (shuffleModeEnabled) {
+                CircularShuffleOrder.Persistent(exoPlayer.shuffleOrder as CircularShuffleOrder)
+            } else null,
+            exoPlayer.playbackState == STATE_ENDED,
+        )
     }
 
     override fun handleAddMediaItems(index: Int, mediaItems: List<MediaItem>): ListenableFuture<*> {

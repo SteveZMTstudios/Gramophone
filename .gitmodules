@@ -5,3 +5,6 @@
 [submodule "hificore/src/main/cpp/libusb-cmake"]
 	path = hificore/src/main/cpp/libusb-cmake
 	url = https://github.com/libusb/libusb-cmake
+[submodule "hificore/src/main/cpp/farbot"]
+	path = hificore/src/main/cpp/farbot
+	url = https://github.com/hogliux/farbot

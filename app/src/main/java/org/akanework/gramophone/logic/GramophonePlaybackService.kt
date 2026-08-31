@@ -142,6 +142,7 @@ import org.akanework.gramophone.ui.MainActivity
 import org.akanework.gramophone.ui.fragments.compose.MqState.Companion.CLIENT_QB_REFRESH_ALL
 import org.akanework.gramophone.ui.fragments.compose.MqState.Companion.CLIENT_QB_REFRESH_CLEAR
 import org.akanework.gramophone.ui.fragments.compose.MqState.Companion.CLIENT_QB_REFRESH_ITEM
+import org.akanework.gramophone.ui.fragments.compose.MqState.Companion.CLIENT_QB_REFRESH_LIST
 import org.akanework.gramophone.ui.fragments.compose.MqState.Companion.CLIENT_QB_REFRESH_QUEUES
 import org.nift4.mediastorecompat.MediaStoreCompat
 import uk.akane.libphonograph.dynamicitem.Favorite
@@ -619,10 +620,10 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                                     items.title,
                                     false, /* TODO(MQ) */
                                     true, /* TODO(MQ) */
-                                    items.seed,
                                     items.isEnded,
                                     items.repeatMode,
                                     items.shuffle,
+                                    items.seed,
                                     items.playbackParameters,
                                 )
                             } else {
@@ -633,10 +634,10 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                                     items.title,
                                     false, /* TODO(MQ) */
                                     true, /* TODO(MQ) */
-                                    items.seed,
                                     items.isEnded,
                                     items.repeatMode,
                                     items.shuffle,
+                                    items.seed,
                                     items.playbackParameters,
                                 )
                                 Log.w(TAG, "failed to restore index")
@@ -1012,8 +1013,10 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                 { songList ->
                     if (seamless) {
                         endedWorkaroundPlayer!!.setMediaItemsSeamlessly(songList,
-                            position, title, pinned = false, original = true,
-                            repeatMode = null, shuffleModeEnabled = null, playbackParameters = null)
+                            position, null, title, pinned = false, original = true,
+                            repeatMode = null, shuffleModeEnabled = null, newShuffleOrder = null,
+                            playbackParameters = null, ended = false,
+                             )
                     } else {
                         val shuffleModeEnabled = if (customCommand.customExtras.containsKey("shuffleEnabled"))
                             customCommand.customExtras.getBoolean("shuffleEnabled") else null
@@ -1043,20 +1046,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                 if (action != CLIENT_QB_REFRESH_CLEAR) {
                     customExtras.putBinder(
                         "activeQueue",
-                        MultiQueueList(listOf(plr.getActiveQueue().copy(
-                            queue = ArrayList<MediaItem>(plr.exoPlayer.mediaItemCount).apply {
-                                for (i in 0..<plr.exoPlayer.mediaItemCount) {
-                                    add(plr.exoPlayer.getMediaItemAt(i))
-                                }
-                            },
-                            shuffleOrder = if (plr.shuffleModeEnabled) {
-                                CircularShuffleOrder.Persistent(
-                                    plr.exoPlayer.shuffleOrder as CircularShuffleOrder
-                                )
-                            } else {
-                                null
-                            }
-                        )))
+                        MultiQueueList(listOf(plr.getActiveQueue()))
                     )
                     customExtras.putBinder(
                         "inactiveQueues",
@@ -1162,7 +1152,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                         val queue: MultiQueueObject = if (queueId != -1L) {
                             qb.getInactiveQueue(queueId)
                         } else {
-                            endedWorkaroundPlayer!!.getActiveQueue()!!
+                            endedWorkaroundPlayer!!.getActiveQueue()
                         }!!
                         SessionResult(SessionResult.RESULT_SUCCESS).also { res ->
                             val binder = MultiQueueList(listOf(queue))
@@ -1607,6 +1597,24 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                     Random.nextLong()
                 )
             )
+            for (controller in mediaSession!!.connectedControllers) {
+                val customCommand = SessionCommand(CLIENT_QB_REFRESH_LIST, Bundle.EMPTY).apply {
+                    val plr = endedWorkaroundPlayer!!
+                    customExtras.putBinder(
+                        "activeQueue",
+                        MultiQueueList(listOf(plr.getActiveQueue()))
+                    )
+                    customExtras.putBinder(
+                        "inactiveQueues",
+                        MultiQueueList(qb.getInactiveQueues())
+                    )
+                }
+                mediaSession!!.sendCustomCommand(
+                    controller,
+                    customCommand,
+                    Bundle.EMPTY
+                )
+            }
         }
 
         lastPlayedManager.save()

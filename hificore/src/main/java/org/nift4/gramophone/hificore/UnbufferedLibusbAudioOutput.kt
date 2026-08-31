@@ -1,11 +1,11 @@
 package org.nift4.gramophone.hificore
 
 import android.media.AudioDeviceInfo
-import android.os.Handler
 import android.os.Looper
 import androidx.media3.common.C
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.util.Log
+import androidx.media3.common.util.Util
 import androidx.media3.exoplayer.audio.AudioOutput
 import com.jwoolston.libusb.AsyncTransfer
 import com.jwoolston.libusb.LibusbError
@@ -15,11 +15,30 @@ import com.jwoolston.libusb.UsbInterface
 import com.jwoolston.libusb.TransferCallback
 import java.nio.ByteBuffer
 
-class SynchronousLibusbAudioOutput(
+// For synchronous, the clock source is the USB clock. That means we send constant amount of
+// samples per packet based on the assumption we send exactly samples for 125us, per packet.
+// Adaptive sinks will essentially achieve the same result when we use the same strategy.
+// The basic assumption for the above is that decoder is faster than real-time to ensure we
+// always have enough data. We do NOT use an internal buffer, we use transfers as the buffer.
+// If we read too many iso packets into one transfer at once, we would starve the decoder.
+// If we do not read enough in, we waste CPU time with repeatedly having overhead of
+// decoding and submitting transfer, so we optimally want as much as possible that would not
+// starve decoder (but a lot would mean high packet queue size, which means high audio
+// latency, which we don't want). The total packet queue (=buffer size, essentially) should
+// be tuned for avoiding USB xrun if we are too slow to generate new packets, this means it
+// should be some higher multiple of transfer queue to make sure if we are late once or
+// twice we don't instantly xrun (maybe 4 times). It should also not be too high due to
+// audio latency as previously mentioned.
+// We can say 4 transfers and as such (packet queue size / 4) packets per transfer, with
+// packet queue size being size of audio buffer. If audio buffer is too small, we will xrun,
+// and if it's too big we simply have high latency. Pause/flush can be implemented like that too, by
+// cancelling  transfers. So we can go safe and queue a lot of buffers and just cancel some
+// transfers if we don't feel like sending those anymore.
+class UnbufferedLibusbAudioOutput(
     private val device: UsbDevice, private val usbInterface: UsbInterface
 ) : AudioOutput, TransferCallback {
     companion object {
-        private const val TAG = "SynchronousLibusbAO"
+        private const val TAG = "UnbufferedLibusbAO"
     }
     private val listeners = mutableListOf<AudioOutput.Listener>()
     private val transfers: List<TimestampedAsyncTransfer>
@@ -105,6 +124,7 @@ class SynchronousLibusbAudioOutput(
 
     override fun pause() {
         paused = true
+        sentAdvancing = false
         Log.e(TAG, "-->pause")
         //cancel() todo
     }
@@ -163,6 +183,7 @@ class SynchronousLibusbAudioOutput(
     override fun flush() {
         Log.e(TAG, "-->flush")
         flushGeneration++
+        sentAdvancing = false
         timestampFrames = 0
         timestampWrite = 0
         cancel()
@@ -175,6 +196,7 @@ class SynchronousLibusbAudioOutput(
     override fun stop() {
         Log.e(TAG, "-->stop")
         stopping = true
+        sentAdvancing = false
     }
 
     override fun release() {
@@ -214,7 +236,8 @@ class SynchronousLibusbAudioOutput(
     }
 
     override fun getPositionUs(): Long {
-        return timestampFrames * 10000 / 441
+        //TODO: this should NOT reset on flush ....or should it?!
+        return Util.sampleCountToDurationUs(timestampFrames, sampleRate)
     }
 
     override fun getPlaybackParameters(): PlaybackParameters {
@@ -266,12 +289,13 @@ class SynchronousLibusbAudioOutput(
         if (released) return
         val transfer = transfer as TimestampedAsyncTransfer
         val time = System.currentTimeMillis() - 10
-        if (!sentAdvancing) {
-            listeners.forEach { it.onPositionAdvancing(time) }
-            sentAdvancing = true
-        }
-        if (transfer.flushGeneration == flushGeneration)
+        if (transfer.flushGeneration == flushGeneration) {
             this.timestampFrames = transfer.timestamp
+            if (!paused && !stopping && !sentAdvancing) {
+                listeners.forEach { it.onPositionAdvancing(time) }
+                sentAdvancing = true
+            }
+        }
         transfer.buffer.clear()
         transferQueue.add(transfer)
         Log.e(TAG, "SUCCESSFUL transfer with ts ${transfer.flushGeneration} ${transfer.timestamp}(at gen${flushGeneration} $timestampFrames), tx=$bytesTransferred, qs=${transferQueue.size}/${transfers.size} (p=${pendingTransfer != null},sq=${transferSendQueue.size})")
@@ -286,8 +310,6 @@ class SynchronousLibusbAudioOutput(
         val transfer = transfer as TimestampedAsyncTransfer
         //TODO()
         Log.e(TAG, "failed to send data: $result, tx=$bytesTransferred")
-        if (transfer.flushGeneration == flushGeneration)
-            this.timestampFrames = transfer.timestamp
         transfer.buffer.clear()
         transferQueue.add(transfer)
     }

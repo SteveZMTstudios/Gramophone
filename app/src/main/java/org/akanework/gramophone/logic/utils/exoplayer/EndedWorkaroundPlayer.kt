@@ -74,9 +74,7 @@ class EndedWorkaroundPlayer(
     val exoPlayer
         get() = player as ExoPlayer
 
-    var nextShuffleOrder:
-            ((firstIndex: Int, mediaItemCount: Int, EndedWorkaroundPlayer) -> CircularShuffleOrder)? =
-        null
+    var nextShuffleOrder: CircularShuffleOrder.Persistent? = null
     var currentQueueId: Long? = null
     var currentTitle: String? = null
     var currentIsPinned = false
@@ -222,10 +220,10 @@ class EndedWorkaroundPlayer(
         title: String,
         pinned: Boolean,
         original: Boolean,
-        newShuffleOrder: CircularShuffleOrder.Persistent?,
         ended: Boolean,
         repeatMode: Int?,
         shuffleModeEnabled: Boolean?,
+        newShuffleOrder: CircularShuffleOrder.Persistent?,
         playbackParameters: PlaybackParameters?,
     ) {
         cloneQueue(generateQueueId(), title, pinned, original)
@@ -234,7 +232,7 @@ class EndedWorkaroundPlayer(
         if (repeatMode != null) super.handleSetRepeatMode(repeatMode)
         if (shuffleModeEnabled != null) super.handleSetShuffleModeEnabled(shuffleModeEnabled)
         if (playbackParameters != null) super.handleSetPlaybackParameters(playbackParameters)
-        nextShuffleOrder = newShuffleOrder?.toFactory()
+        nextShuffleOrder = newShuffleOrder
         super.handleSetMediaItems(mediaItems, startIndex, startPositionMs)
         if (nextShuffleOrder != null)
             throw IllegalStateException("shuffleFactory was not consumed during set")
@@ -249,11 +247,14 @@ class EndedWorkaroundPlayer(
     fun setMediaItemsSeamlessly(
         mediaItems: List<MediaItem>,
         startIndex: Int,
+        startPositionMs: Long?,
         title: String,
         pinned: Boolean,
         original: Boolean,
+        ended: Boolean,
         repeatMode: Int?,
         shuffleModeEnabled: Boolean?,
+        newShuffleOrder: CircularShuffleOrder.Persistent?,
         playbackParameters: PlaybackParameters?,
     ) {
         if (startIndex == C.INDEX_UNSET)
@@ -264,6 +265,8 @@ class EndedWorkaroundPlayer(
             val index = currentMediaItemIndex
             val isLast = mediaItemCount - index == 1
             cloneQueue(generateQueueId(), title, pinned, original)
+            val newShuffleOrder = newShuffleOrder ?: (exoPlayer.shuffleOrder as CircularShuffleOrder
+                    ).lastSeed?.let { CircularShuffleOrder.Persistent(it) }
             if (repeatMode != null) super.handleSetRepeatMode(repeatMode)
             if (shuffleModeEnabled != null) super.handleSetShuffleModeEnabled(shuffleModeEnabled)
             if (playbackParameters != null) super.handleSetPlaybackParameters(playbackParameters)
@@ -275,15 +278,17 @@ class EndedWorkaroundPlayer(
                     mediaItems.subList(0, startIndex)
                 )
             super.handleReplaceMediaItems(
-                startIndex, startIndex,
+                startIndex, startIndex + 1,
                 listOf(mediaItems[startIndex])
             )
             if (isLast) {
-                if (mediaItems.size > startIndex + 1)
+                if (mediaItems.size > startIndex + 1) {
+                    nextShuffleOrder = newShuffleOrder
                     super.handleAddMediaItems(
                         Int.MAX_VALUE, mediaItems
                             .subList(startIndex + 1, mediaItems.size)
                     )
+                }
             } else
                 super.handleReplaceMediaItems(
                     startIndex + 1, Int.MAX_VALUE,
@@ -291,10 +296,16 @@ class EndedWorkaroundPlayer(
                         startIndex + 1, mediaItems.size
                     ) else emptyList()
                 )
+            if (!isLast || mediaItems.size <= startIndex + 1) {
+                newShuffleOrder?.let {
+                    exoPlayer.shuffleOrder = it.create(startIndex,
+                        exoPlayer.mediaItemCount, this)
+                }
+            }
         } else {
             setMediaItems(
-                mediaItems, startIndex, C.TIME_UNSET, title, pinned,
-                original, null, false, repeatMode, shuffleModeEnabled,
+                mediaItems, startIndex, startPositionMs?: C.TIME_UNSET, title, pinned,
+                original, ended, repeatMode, shuffleModeEnabled, newShuffleOrder,
                 playbackParameters
             )
         }
@@ -386,7 +397,7 @@ class EndedWorkaroundPlayer(
         val qt = title ?: context.getString(R.string.unknown_playlist)
         setMediaItems(
             list, startIndex, startPositionMs, qt, false,
-            true, null, false, null,
+            true, false, null, null,
             null, null
         )
         return Futures.immediateVoidFuture()
@@ -415,11 +426,21 @@ class EndedWorkaroundPlayer(
             index = 0,
             title = currentTitle ?: context.getString(R.string.unknown_playlist),
             expiry = if (currentIsPinned) null else 0L,
-            queue = ArrayList(),
-            startIndex = currentMediaItemIndex,
-            startPositionMs = C.TIME_UNSET,
-            repeatMode = repeatMode,
-            shuffleOrder = null,
+            queue = ArrayList<MediaItem>(exoPlayer.mediaItemCount).apply {
+                for (i in 0..<exoPlayer.mediaItemCount) {
+                    add(exoPlayer.getMediaItemAt(i))
+                }
+            },
+            startIndex = exoPlayer.currentMediaItemIndex,
+            startPositionMs = exoPlayer.currentPosition,
+            repeatMode = exoPlayer.repeatMode,
+            shuffleOrder = if (exoPlayer.shuffleModeEnabled) {
+                CircularShuffleOrder.Persistent(
+                    exoPlayer.shuffleOrder as CircularShuffleOrder
+                )
+            } else {
+                null
+            },
             ended = playbackState == STATE_ENDED,
             isOriginal = currentIsOriginal,
         )

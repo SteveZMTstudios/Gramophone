@@ -51,6 +51,9 @@ public class AsyncTransfer {
         }
     }
 
+    // TODO should every method accessing nativeObject be synchronized to avoid UAF with another
+    //  thread calling release? all of our code is safe, just if user calls us twice it's possible
+
     public boolean isInFlight() {
         return nativeIsInFlight(getNativeObject());
     }

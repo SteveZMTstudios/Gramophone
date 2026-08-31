@@ -105,8 +105,8 @@ class QueueBoard(
         plr.setMediaItems(
             new.queue, new.startIndex,
             new.startPositionMs,
-            new.title, new.expiry == null, new.isOriginal, new.shuffleOrder, new.ended,
-            new.repeatMode, new.shuffleModeEnabled, null
+            new.title, new.expiry == null, new.isOriginal, new.ended, new.repeatMode,
+            new.shuffleModeEnabled, new.shuffleOrder, null,
         )
     }
 

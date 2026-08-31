@@ -108,7 +108,7 @@ fun QueueDropdownMenu(
                 title = stringResource(R.string.play_next),
                 leadingIcon = null,
                 action = {
-                    mqState.playNext(id)
+                    mqState.playNext(if (mq == mqState.activeQueue?.second) -1 else id)
                 },
             ),
 //            DropdownItem(

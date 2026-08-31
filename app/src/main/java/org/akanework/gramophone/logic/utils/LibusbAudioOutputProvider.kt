@@ -7,7 +7,7 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.exoplayer.audio.AudioOutput
 import androidx.media3.exoplayer.audio.AudioOutputProvider
 import org.akanework.gramophone.logic.gramophoneApplication
-import org.nift4.gramophone.hificore.SynchronousLibusbAudioOutput
+import org.nift4.gramophone.hificore.BufferedLibusbAudioOutput
 
 class LibusbAudioOutputProvider(private val context: Context) : AudioOutputProvider {
     override fun getFormatSupport(formatConfig: AudioOutputProvider.FormatConfig): AudioOutputProvider.FormatSupport {
@@ -34,7 +34,7 @@ class LibusbAudioOutputProvider(private val context: Context) : AudioOutputProvi
 
     override fun getAudioOutput(config: AudioOutputProvider.OutputConfig): AudioOutput {
         context.gramophoneApplication.uacManager.interfaces?.let {
-            return SynchronousLibusbAudioOutput(context.gramophoneApplication.uacManager.openDevices.first(), it.second)
+            return BufferedLibusbAudioOutput.new(context.gramophoneApplication.uacManager.openDevices.first().second, it.second)
         }
         throw IllegalStateException("pls grant usb dac perm")
     }

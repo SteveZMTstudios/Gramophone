@@ -148,6 +148,9 @@ void LIBUSB_CALL libusb_transfer_callback(struct libusb_transfer *transfer) {
     if (holder->ready == 1 && holder->fd != -1) {
         uint64_t counter = 1;
         int fd = holder->fd;
+        // RT safety: technically not, this is a system call. but the alternative is busy looping,
+        // which is criminal on a battery powered device, and these system calls are unlikely to
+        // block (it's kernel-space atomics + changing thread sleeping->ready).
         // Java will iterate though list of weak references with transfers to find this one. This is
         // safe because we have a JNI-side global reference we'll only release if Java finds us.
         holder->ready = 2; // don't access holder after this, java may reap it instantly
@@ -472,6 +475,21 @@ Java_com_jwoolston_libusb_UsbDevice_nativeGetMaxAltPacketSize(JNIEnv *env, jobje
     return libusb_get_max_alt_packet_size(libusb_get_device(deviceHandle),
                                           if_number,if_alt,
                                           address);
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_jwoolston_libusb_UsbDevice_nativeTakeReference(JNIEnv *env, jobject thiz) {
+    return (jlong) (*env)->NewGlobalRef(env, thiz);
+}
+
+JNIEXPORT void JNICALL
+Java_com_jwoolston_libusb_UsbDevice_nativeReleaseReference(JNIEnv *env, jobject thiz, jlong ref) {
+    (*env)->DeleteGlobalRef(env, (jobject) ref);
+}
+
+JNIEXPORT jobject JNICALL
+Java_com_jwoolston_libusb_UsbDevice_nativeGetReference(JNIEnv *env, jclass clazz, jlong ref) {
+    return (jobject) ref;
 }
 
 #pragma clang diagnostic pop

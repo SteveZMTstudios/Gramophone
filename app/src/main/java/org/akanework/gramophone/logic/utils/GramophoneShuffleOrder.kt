@@ -32,7 +32,9 @@ import kotlin.random.Random
 class CircularShuffleOrder private constructor(
     private val listener: EndedWorkaroundPlayer,
     private val shuffled: IntArray,
-    private val random: Random
+    private val seed: Long,
+    private val random: Random,
+    val lastSeed: Long?
 ) : ShuffleOrder {
     private val indexInShuffled = IntArray(shuffled.size)
 
@@ -65,32 +67,36 @@ class CircularShuffleOrder private constructor(
         }
     }
 
-    constructor(
-        listener: EndedWorkaroundPlayer,
-        firstIndex: Int,
-        length: Int,
-        randomSeed: Long
-    ) :
-            this(listener, firstIndex, length, Random(randomSeed))
-
     private constructor(
         listener: EndedWorkaroundPlayer,
         firstIndex: Int,
         length: Int,
-        random: Random
+        seed: Long,
+        random: Random,
+        lastSeed: Long?
     ) :
             this(
                 listener,
                 calculateListWithFirstIndex(calculateShuffledList(0, length, random), firstIndex),
-                random
+                seed, random, lastSeed
             )
 
     constructor(
         listener: EndedWorkaroundPlayer,
-        shuffledIndices: IntArray,
-        randomSeed: Long
+        firstIndex: Int,
+        length: Int,
+        randomSeed: Long,
+        lastSeed: Long? = null
     ) :
-            this(listener, shuffledIndices.copyOf(), Random(randomSeed))
+            this(listener, firstIndex, length, randomSeed, Random(randomSeed), lastSeed)
+
+    constructor(
+        listener: EndedWorkaroundPlayer,
+        shuffledIndices: IntArray,
+        randomSeed: Long,
+        lastSeed: Long?
+    ) :
+            this(listener, shuffledIndices.copyOf(), randomSeed, Random(randomSeed), lastSeed)
 
     override fun getLength(): Int {
         return shuffled.size
@@ -119,9 +125,10 @@ class CircularShuffleOrder private constructor(
     // B,C,D will be shuffled among themselves to ie D,B,C and then this list will be inserted after
     // A so that song list will now be A,D,B,C,...
     override fun cloneAndInsert(insertionIndex: Int, insertionCount: Int): ShuffleOrder {
-        listener.nextShuffleOrder?.let { factory ->
+        listener.nextShuffleOrder?.let { next ->
             listener.nextShuffleOrder = null
-            val nextShuffleOrder = factory(insertionIndex, shuffled.size + insertionCount, listener)
+            val nextShuffleOrder = next.create(insertionIndex,
+                shuffled.size + insertionCount, listener)
             if (nextShuffleOrder.length == shuffled.size + insertionCount)
                 return nextShuffleOrder
             // We can't throw here as it would permanently break the ExoPlayer and cause app crash
@@ -155,7 +162,7 @@ class CircularShuffleOrder private constructor(
             }
         }
 
-        return CircularShuffleOrder(listener, newShuffled, Random(random.nextLong()))
+        return CircularShuffleOrder(listener, newShuffled, random.nextLong(), seed)
     }
 
     override fun cloneAndSet(insertionCount: Int, startIndex: Int): ShuffleOrder {
@@ -174,7 +181,7 @@ class CircularShuffleOrder private constructor(
         val numberOfElementsToRemove = indexToExclusive - indexFrom
         // short-circuit for performance and because this is allowed if nextShuffleOrder is set
         if (numberOfElementsToRemove == shuffled.size)
-            return CircularShuffleOrder(listener, 0, 0, Random(random.nextLong()))
+            return CircularShuffleOrder(listener, 0, 0, random.nextLong(), seed)
         if (listener.nextShuffleOrder != null)
             throw IllegalStateException("next shuffle order present but removing some items")
         val newShuffled = IntArray(shuffled.size - numberOfElementsToRemove)
@@ -189,7 +196,7 @@ class CircularShuffleOrder private constructor(
             }
         }
 
-        return CircularShuffleOrder(listener, newShuffled, Random(random.nextLong()))
+        return CircularShuffleOrder(listener, newShuffled, random.nextLong(), seed)
     }
 
     override fun cloneAndMove(
@@ -208,6 +215,7 @@ class CircularShuffleOrder private constructor(
     @Parcelize
     class Persistent private constructor(val seed: Long, val data: IntArray?) : Parcelable {
         constructor(order: CircularShuffleOrder) : this(order.random.nextLong(), order.shuffled)
+        constructor(seed: Long) : this(seed, null)
 
         companion object {
             fun deserialize(data: String?): Persistent {
@@ -234,15 +242,11 @@ class CircularShuffleOrder private constructor(
             return if (data != null) "$seed;${data.joinToString(",")}" else seed.toString()
         }
 
-        fun toFactory(): (Int, Int, EndedWorkaroundPlayer) -> CircularShuffleOrder {
-            if (data == null) {
-                return { firstIndex, mediaItemCount, it ->
-                    CircularShuffleOrder(it, firstIndex, mediaItemCount, seed)
-                }
+        fun create(firstIndex: Int, mediaItemCount: Int, it: EndedWorkaroundPlayer): CircularShuffleOrder {
+            return if (data == null) {
+                CircularShuffleOrder(it, firstIndex, mediaItemCount, seed)
             } else {
-                return { _, _, it ->
-                    CircularShuffleOrder(it, data, seed)
-                }
+                CircularShuffleOrder(it, data, seed, null)
             }
         }
     }

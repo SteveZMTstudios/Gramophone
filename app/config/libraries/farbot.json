@@ -1,0 +1,15 @@
+{
+  "uniqueId": "io.github.hogliux.farbot:farbot",
+  "developers": [{
+    "name": "Fabian Renn",
+    "organisationUrl": "https://github.com/hogliux"
+  }],
+  "artifactVersion": "6306c24",
+  "description": "FAbian's Realtime Box o' Tricks",
+  "name": "farbot",
+  "tag": "custom",
+  "website": "https://github.com/hogliux/farbot",
+  "licenses": [
+    "MIT"
+  ]
+}

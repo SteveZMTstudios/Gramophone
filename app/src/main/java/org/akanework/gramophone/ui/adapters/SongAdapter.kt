@@ -50,6 +50,7 @@ import org.akanework.gramophone.ui.components.NowPlayingDrawable
 import org.akanework.gramophone.ui.fragments.ArtistSubFragment
 import org.akanework.gramophone.ui.fragments.DetailDialogFragment
 import org.akanework.gramophone.ui.fragments.GeneralSubFragment
+import org.akanework.gramophone.ui.fragments.SearchFragment
 import uk.akane.libphonograph.items.addDate
 import uk.akane.libphonograph.items.albumId
 import uk.akane.libphonograph.items.albumYear
@@ -63,7 +64,7 @@ import java.util.GregorianCalendar
  * [SongAdapter] is an adapter for displaying songs.
  */
 class SongAdapter(
-    fragment: Fragment?,
+    val fragment: Fragment?,
     val queueTitle: Flow<String>?,
     songList: Flow<List<MediaItem>?> = (fragment?.requireContext() ?: fallbackContext!!)
         .gramophoneApplication.reader.songListFlow,
@@ -230,7 +231,7 @@ class SongAdapter(
             setMediaItemsSeamlessly(songList, position, title)
             prepare()
             play()
-            if (currentItem?.mediaId == songList[position].mediaId) {
+            if (currentItem?.mediaId == songList[position].mediaId && fragment !is SearchFragment) {
                 mainActivity.playerBottomSheet.open()
             }
         }

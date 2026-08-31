@@ -21,6 +21,7 @@ import android.os.Looper;
 import android.os.ParcelFileDescriptor;
 import android.system.Os;
 
+import androidx.annotation.GuardedBy;
 import androidx.annotation.NonNull;
 import androidx.media3.common.util.Log;
 
@@ -31,6 +32,7 @@ import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.HashSet;
 
 /**
  * This class represents a USB device attached to the android device with the android device acting as the USB host.
@@ -64,6 +66,8 @@ public class UsbDevice {
     private final UsbDeviceConnection connection;
     private final boolean requireRealTime;
     private long nativeObject;
+    @GuardedBy("#this")
+    private final HashSet<Long> references = new HashSet<>();
 
     /**
      * All configurations for this device
@@ -128,6 +132,9 @@ public class UsbDevice {
         this.configurations = configurations;
     }
 
+    // TODO should every method accessing nativeObject be synchronized to avoid UAF with another
+    //  thread calling close? all of our code is safe, just if user calls us twice it's possible
+
     static {
         if (!nativeInitialize()) {
             throw new RuntimeException("Failed to initialize native layer for UsbDevice.");
@@ -136,6 +143,63 @@ public class UsbDevice {
 
     static void initialize() {
         // intentionally empty, forces class initialization
+    }
+
+    /**
+     * Creates a new strong JNI reference to this object. This reference prevents both GC and
+     * manual calls of {@link #close()} to close this device.<p>
+     *
+     * After calling this, it's safe to use the libusb_device_handler* returned from {@link
+     * #getNativeObject()} until {@link #releaseReference(long)} is called.
+     *
+     * @return An opaque identifier for the reference. (NOT the same as {@link #getNativeObject()})
+     */
+    public synchronized long takeReference() {
+        if (nativeObject == 0) {
+            throw new IllegalArgumentException("This UsbDevice was already released");
+        }
+        long ref = nativeTakeReference();
+        if (ref != 0) {
+            references.add(ref);
+        }
+        return ref;
+    }
+
+    private native long nativeTakeReference();
+    private static native UsbDevice nativeGetReference(long ref);
+    private native void nativeReleaseReference(long ref);
+
+    /**
+     * Releases the strong reference to this object, allowing GC and manual calls of {@link
+     * #close()} to close the device again if it was the last reference.<p>
+     *
+     * Use of the result of {@link #getNativeObject()} must be discontinued before this is called.
+     * This includes the fact that all transfers allocated using {@code libusb_alloc_transfer} must
+     * have been freed at this point, as well as any other libusb object created by native code.
+     * @param reference The opaque identifier for the reference. (NOT the same as {@link
+     * #getNativeObject()})
+     */
+    public synchronized void releaseReference(long reference) {
+        references.remove(reference);
+        nativeReleaseReference(reference);
+        if (nativeObject == 0) { // should never happen
+            throw new IllegalStateException("This UsbDevice was already released");
+        }
+    }
+
+    /**
+     * Releases the strong reference to this object, allowing GC and manual calls of {@link
+     * #close()} to close the device again if it was the last reference.<p>
+     *
+     * Use of the result of {@link #getNativeObject()} must be discontinued before this is called.
+     * This includes the fact that all transfers allocated using {@code libusb_alloc_transfer} must
+     * have been freed at this point, as well as any other libusb object created by native code.
+     * @param reference The opaque identifier for the reference. (NOT the same as {@link
+     * #getNativeObject()})
+     */
+    public static void releaseReferenceStatic(long reference) {
+        UsbDevice obj = nativeGetReference(reference);
+        obj.releaseReference(reference);
     }
 
     /**
@@ -308,9 +372,10 @@ public class UsbDevice {
     }
 
     /**
-     * Retrieves the {@link ByteBuffer} pointing to a {@code libusb_device_handle} instance in native.
+     * Retrieves the long pointing to a {@code libusb_device_handle} instance in native.<p>
      *
-     * @return The {@link ByteBuffer} pointing to a {@code libusb_device_handle} instance in native.
+     * Don't forget to use {@link #takeReference()} to avoid the handle being freed while you're
+     * using it.
      */
     public long getNativeObject() {
         if (nativeObject == 0) {
@@ -418,7 +483,7 @@ public class UsbDevice {
      * client must register the device with {@link UsbManager} again to retrieve a new instance to reestablish
      * communication with the device.
      */
-    public void close() {
+    public synchronized void close() {
         if (nativeObject == 0)
              return;
         synchronized (manager.lock) {

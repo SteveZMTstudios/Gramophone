@@ -1,5 +1,6 @@
 package org.akanework.gramophone.ui.fragments.compose
 
+import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
@@ -83,13 +84,13 @@ import com.google.common.util.concurrent.Futures
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import org.akanework.gramophone.R
 import org.akanework.gramophone.logic.MultiQueueList
 import org.akanework.gramophone.logic.MultiQueueObject
 import org.akanework.gramophone.logic.age
 import org.akanework.gramophone.logic.deleteQueue
 import org.akanework.gramophone.logic.getInactiveQueues
-import org.akanework.gramophone.logic.getInactiveQueue
 import org.akanework.gramophone.logic.getQueueForUi
 import org.akanework.gramophone.logic.loadQueue
 import org.akanework.gramophone.logic.pinQueue
@@ -98,6 +99,7 @@ import org.akanework.gramophone.logic.renameQueue
 import org.akanework.gramophone.logic.supportsWideScreen
 import org.akanework.gramophone.logic.unpinQueue
 import org.akanework.gramophone.logic.utils.Flags
+import org.akanework.gramophone.logic.utils.convertDurationToTimeStamp
 import org.akanework.gramophone.ui.MainActivity
 import org.akanework.gramophone.ui.components.Chronometer
 import org.akanework.gramophone.ui.components.PlaylistQueueSheet
@@ -191,7 +193,7 @@ fun MqListItem(
                         "${index + 1}. ${mq.title}"
                     }
                     val showId = Flags.MQ_ALWAYS_SHOW_QUEUE_ID ||
-                            (mqState.inactiveQueues + mqState.activeQueue)
+                            (mqState.inactiveQueues + mqState.activeQueue?.second)
                                 .filterNotNull()
                                 .any { it.id != mq.id && it.title == mq.title }
 
@@ -390,7 +392,7 @@ fun QueueInfo(
                 MqListItem(
                     mqState = mqState,
                     index = -1,
-                    mq = it,
+                    mq = it.second,
                     horizontalPadding = 0.dp,
                     verticalPadding = 0.dp,
                     isActiveQueue = true,
@@ -587,7 +589,7 @@ fun ActionBar(
             modifier = Modifier
         ) {
             val index = -1
-            val mq = mqState.activeQueue
+            val mq = mqState.activeQueue?.second
             if (mq != null) {
                 QueueDropdownMenu(
                     mqState = mqState,
@@ -912,8 +914,10 @@ class MqState(
             playlistQueueSheet?.lockQueue(value != null)
         }
 
-    var activeQueue: MultiQueueObject? by mutableStateOf(null)
+    var activeQueue: Pair<MutableList<Int>, MultiQueueObject>? by mutableStateOf(null)
         private set
+
+    var playlist: Pair<MutableList<Int>, MutableList<MediaItem>> = Pair(ArrayList(), ArrayList())
 
     var inactiveQueues = mutableStateListOf<MultiQueueObject>()
         private set
@@ -998,28 +1002,47 @@ class MqState(
             return@addCallback Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
         }
 
-        init()
+        runBlocking {
+            init() {
+                activeQueue?.let {
+                    updateTimer(it.second.startIndex, it.second.startPositionMs)
+                }
+                playlist.first.indexOfFirst { i ->
+                    i == (instance.currentMediaItemIndex)
+                }.let { scrollPos ->
+                    playlistQueueSheet.scrollToPositionWithOffsetCompat(
+                        scrollPos,
+                        // quick UX hack to show there's more songs above (well, if there is).
+                        if (scrollPos >= playlist.first.size - 2) 0 else (playlistQueueSheet.context
+                            .resources.getDimensionPixelOffset(R.dimen.list_height) * 0.5f).toInt()
+                    )
+                }
+            }
+        }
     }
 
     /**
      * (Re)initialize multiqueue data.
      */
-    private fun init(
+    private suspend fun init(
         onFinish: (() -> Unit)? = null,
     ) {
-        coroutineScope.launch {
-            activeQueue = null
-            detachedQueue = null
-            inactiveQueues.clear()
+        activeQueue = null
+        detachedQueue = null
+        inactiveQueues.clear()
 
-            instance.getInactiveQueue()?.let {
-                activeQueue = it
+        instance.getQueueForUi()?.let {
+            activeQueue = it
+            playlist = Pair(it.first, it.second.queue)
+            val i = (instance.currentMediaItemIndex).let {
+                if (it == -1) 0 else it
             }
-            instance.getInactiveQueues().toMutableList().let {
-                inactiveQueues.addAll(it)
-            }
-            onFinish?.invoke()
+            playlistQueueSheet?.playlistAdapter?.currentMediaItemIndex = playlist.first.indexOf(i)
         }
+        instance.getInactiveQueues().toMutableList().let {
+            inactiveQueues.addAll(it)
+        }
+        onFinish?.invoke()
     }
 
 
@@ -1044,7 +1067,7 @@ class MqState(
     fun detach(index: Int) {
         val mq = inactiveQueues.getOrNull(index)
         if (mq == null) {
-            playlistQueueSheet?.forceUpdate()
+            updateList()
             return
         }
         detach(mq)
@@ -1056,7 +1079,7 @@ class MqState(
      */
     fun detach(mq: MultiQueueObject) {
         if (!inactiveQueues.contains(mq)) {
-            playlistQueueSheet?.forceUpdate()
+            resetHead()
             return
         }
         detachedQueue = mq
@@ -1065,7 +1088,7 @@ class MqState(
         this.mediaItemCount.value = mq.getSize()
         this.currentMediaItemIndex.value = getShuffledIndex(mq)
         this.durationMs.value = getDurationMs(mq)
-        playlistQueueSheet?.forceUpdate(mq.id)
+        updateList(instance.getQueueForUi(mq.id))
     }
 
     /**
@@ -1079,7 +1102,7 @@ class MqState(
         this.currentMediaItemIndex.value = getShuffledIndex()
         this.durationMs.value = getDurationMs()
         if (updateSongList) {
-            playlistQueueSheet?.forceUpdate(-1)
+            updateList(mq = activeQueue)
         }
     }
 
@@ -1114,9 +1137,10 @@ class MqState(
         // do not use full resetHead(false) to avoid restoring the stats of old active queue right before the new one is loaded
         detachedQueue = null
         playlistQueueSheet?.lockQueue(detachedQueue != null)
-        playlistQueueSheet?.forceRefresh()
 
-        init()
+        coroutineScope.launch {
+            init()
+        }
     }
 
 
@@ -1135,7 +1159,7 @@ class MqState(
 
     fun toggleShuffleMode() {
         instance.shuffleModeEnabled = !instance.shuffleModeEnabled
-        playlistQueueSheet?.forceUpdate()
+        updateList()
     }
 
     fun playNext(queueId: Long) {
@@ -1146,7 +1170,10 @@ class MqState(
             )
         }
         if (!isDetached()) {
-            playlistQueueSheet?.forceUpdate()
+            updateList()
+            activeQueue = instance.getQueueForUi()
+            this.mediaItemCount.value = instance.mediaItemCount
+            this.durationMs.value = getDurationMs(activeQueue!!.second)
         }
     }
 
@@ -1157,7 +1184,7 @@ class MqState(
             )
         }
         if (!isDetached()) {
-            playlistQueueSheet?.forceUpdate()
+            updateList()
         }
     }
 
@@ -1168,7 +1195,9 @@ class MqState(
     fun renameQueue(queueId: Long, title: String, dryRun: Boolean): Boolean {
         val ret = instance.renameQueue(queueId, title, dryRun)
         if (!dryRun && ret) {
-            init() // can be more efficient
+            coroutineScope.launch {
+                init() // can be more efficient
+            }
         }
         return ret
     }
@@ -1176,13 +1205,43 @@ class MqState(
     fun togglePin(queueId: Long? = -1) {
         if (queueId == null) return
         val queue =
-            (if (queueId == -1L) activeQueue else inactiveQueues.find { it.id == queueId })!!
+            (if (queueId == -1L) activeQueue?.second else inactiveQueues.find { it.id == queueId })!!
 
         if (queue.expiry != null) {
             instance.pinQueue(queueId)
         } else {
             instance.unpinQueue(queueId)
         }
+    }
+
+    /**
+     * Trigger a chromometer update
+     *
+     * @param currentMediaItemIndex Override for [androidx.media3.session.MediaBrowser.currentMediaItemIndex]
+     * @param currentPosition Override for [androidx.media3.session.MediaBrowser.getCurrentPosition]
+     */
+    fun updateTimer(currentMediaItemIndex: Int? = null, currentPosition: Long? = null) {
+        if (currentMediaItemIndex == -1) return
+        val current = (currentMediaItemIndex ?: instance.currentMediaItemIndex).let {
+            playlist.first.indexOf(it).takeIf { it != -1 }
+        } ?: 0
+        if (current < 0) return
+        val elapsedCurrentMs = currentPosition ?: instance.currentPosition
+        playlistQueueSheet?.durationView?.format = playlistQueueSheet.context.getString(
+            R.string.duration_queue,
+            "%s", playlist.second.sumOf { it.mediaMetadata.durationMs ?: 0L }
+                .convertDurationToTimeStamp(true))
+        if (instance.isPlaying) {
+            playlistQueueSheet?.durationView?.start()
+        } else {
+            playlistQueueSheet?.durationView?.stop()
+        }
+        playlistQueueSheet?.durationView?.base =
+            SystemClock.elapsedRealtime() + playlist.first.subList(
+                current,
+                playlist.first.size
+            ).sumOf { playlist.second[it].mediaMetadata.durationMs ?: 0L } -
+                    elapsedCurrentMs + 1000
     }
 
 
@@ -1249,16 +1308,16 @@ class MqState(
     ) {
         when (level) {
             RefreshLevel.ALL -> {
-                this.activeQueue = activeQueue?.second
+                this.activeQueue = activeQueue
                 detachedQueue = null
                 this.inactiveQueues.clear()
                 this.inactiveQueues.addAll(inactiveQueues)
 
-                playlistQueueSheet?.forceUpdate(activeQueue)
+                updateList(mq = activeQueue)
             }
             // TODO(mq): it should be possible to refresh single items
             RefreshLevel.QUEUES, RefreshLevel.ITEM -> {
-                this.activeQueue = activeQueue?.second
+                this.activeQueue = activeQueue
                 detachedQueue = null
                 this.inactiveQueues.clear()
                 this.inactiveQueues.addAll(inactiveQueues)
@@ -1271,10 +1330,16 @@ class MqState(
                     activeQueue?.second?.let {
                         queues.add(it)
                     }
-                    playlistQueueSheet?.forceUpdate(queues.find { it.id == queueId }!!.id)
+                    updateList(instance.getQueueForUi(queues.find { it.id == queueId }!!.id))
                 } else {
+                    this.activeQueue = activeQueue
+                    playlist = if (activeQueue == null) {
+                        Pair(ArrayList(), ArrayList())
+                    } else {
+                        Pair(activeQueue.first, activeQueue.second.queue)
+                    }
                     // update active queue with one provided by the service. Avoid dumpPlaylist() race condition
-                    playlistQueueSheet?.forceUpdate(activeQueue)
+                    updateList(mq = activeQueue)
                 }
             }
 
@@ -1282,6 +1347,49 @@ class MqState(
                 playlistQueueSheet?.dismiss()
             }
         }
+    }
+
+    /**
+     * Update playlist and timer
+     * 
+     * @param mqIndex Index of queue in the inactive queues list. Specify -1 for the active queue
+     * @param mq Optionally specify [MultiQueueObject] to be used instead of the resolved queue with mqIndex
+     */
+    private fun updateList(
+        mq: Pair<MutableList<Int>, MultiQueueObject>? = null,
+    ) {
+        val pl: Pair<MutableList<Int>, MutableList<MediaItem>> = if (mq != null) {
+            Pair(mq.first, mq.second.queue)
+        } else {
+            dumpPlaylist()
+        }
+        playlist = pl
+        playlistQueueSheet?.playlistAdapter?.notifyDataSetChanged()
+
+        // update playing indicator, scroll to
+        val i = (mq?.second?.startIndex ?: instance.currentMediaItemIndex).let {
+            if (it == -1) 0 else it
+        }
+        playlistQueueSheet?.setCurrentMediaItemIndex(playlist.first.indexOf(i))
+        playlistQueueSheet?.smoothScrollToCurrentPosition(playlist.first.indexOf(i))
+
+        updateTimer(mq?.second?.startIndex, mq?.second?.startPositionMs)
+    }
+
+    private fun dumpPlaylist(): Pair<MutableList<Int>, MutableList<MediaItem>> {
+        val items = LinkedList<MediaItem>()
+        val instance = activity.getPlayer()!!
+        for (i in 0 until instance.mediaItemCount) {
+            items.add(instance.getMediaItemAt(i))
+        }
+        val indexes = LinkedList<Int>()
+        val s = instance.shuffleModeEnabled
+        var i = instance.currentTimeline.getFirstWindowIndex(s)
+        while (i != C.INDEX_UNSET) {
+            indexes.add(i)
+            i = instance.currentTimeline.getNextWindowIndex(i, Player.REPEAT_MODE_OFF, s)
+        }
+        return Pair(indexes, items)
     }
 
     fun age() {

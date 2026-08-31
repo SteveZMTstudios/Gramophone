@@ -403,10 +403,12 @@ fun MediaController.getInactiveQueue(queueId: Long = -1L): MultiQueueObject? =
         MultiQueueList.getList(binder).firstOrNull()
     }
 
+/**
+ * Get full [MultiQueueObject] object with media items and shuffle order.
+ *
+ * @param queueId Inactive queue id, or specify -1 to retrieve the active queue.
+ */
 fun MediaController.getQueueForUi(queueId: Long = -1L): Pair<MutableList<Int>, MultiQueueObject>? {
-    if (queueId == -1L) {
-        return null
-    }
     return sendCustomCommand(
         SessionCommand(SERVICE_QB_GET_QUEUE_FOR_UI, Bundle.EMPTY).apply {
             customExtras.putLong("queueId", queueId)

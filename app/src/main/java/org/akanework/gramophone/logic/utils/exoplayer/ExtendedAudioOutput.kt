@@ -26,38 +26,38 @@ class ExtendedAudioOutputProvider(sink: AudioOutputProvider) : ForwardingAudioOu
     }
 }
 
-abstract class ExtendedAudioOutput(ao: AudioOutput) : ForwardingAudioOutput(ao) {
-    abstract val routedDevice: AudioDeviceInfo?
-    abstract val isInitialized: Boolean
+interface ExtendedAudioOutput : AudioOutput {
+    val routedDevice: AudioDeviceInfo?
+    val isInitialized: Boolean
 
-    abstract fun addOnRoutingChangedListener(listener: RoutingChangedListener, handler: Handler)
-    abstract fun removeOnRoutingChangedListener(listener: RoutingChangedListener)
-    abstract fun getOutputPort(): Int?
-    abstract fun getLatency(): Int?
-    abstract fun getHalSampleRate(): UInt?
-    abstract fun getGrantedFlags(): Int?
-    abstract fun dump(): String?
-    abstract fun getHalFormat(): UInt?
-    abstract fun getHalChannelCount(): Int?
-    abstract fun getPtr(): Long
+    fun addOnRoutingChangedListener(listener: RoutingChangedListener, handler: Handler)
+    fun removeOnRoutingChangedListener(listener: RoutingChangedListener)
+    fun getOutputPort(): Int?
+    fun getLatency(): Int?
+    fun getHalSampleRate(): UInt?
+    fun getGrantedFlags(): Int?
+    fun dump(): String?
+    fun getHalFormat(): UInt?
+    fun getHalChannelCount(): Int?
+    fun getPtr(): Long
 
     fun interface RoutingChangedListener {
         fun onRoutingChanged(router: ExtendedAudioOutput)
     }
 }
 
-class NativeTrackExtendedAudioOutput(private val ao: NativeTrackAudioOutput) : ExtendedAudioOutput(ao) {
+class NativeTrackExtendedAudioOutput(private val ao: NativeTrackAudioOutput) : ForwardingAudioOutput(ao), ExtendedAudioOutput {
     companion object {
         private const val TAG = "NTExtendedAO"
     }
-    private val listeners = IdentityHashMap<RoutingChangedListener, NativeTrack.OnRoutingChangedListener>()
+    private val listeners = IdentityHashMap<ExtendedAudioOutput.RoutingChangedListener, NativeTrack.OnRoutingChangedListener>()
     override val routedDevice: AudioDeviceInfo?
         get() = ao.nativeTrack.getRoutedDevice()
     override val isInitialized: Boolean
         get() = ao.nativeTrack.myState != NativeTrack.State.RELEASED
 
     override fun addOnRoutingChangedListener(
-        listener: RoutingChangedListener,
+        listener: ExtendedAudioOutput.RoutingChangedListener,
         handler: Handler
     ) {
         val nativeListener = synchronized(listeners) {
@@ -68,7 +68,7 @@ class NativeTrackExtendedAudioOutput(private val ao: NativeTrackAudioOutput) : E
         ao.nativeTrack.addOnRoutingChangedListener(nativeListener, handler)
     }
 
-    override fun removeOnRoutingChangedListener(listener: RoutingChangedListener) {
+    override fun removeOnRoutingChangedListener(listener: ExtendedAudioOutput.RoutingChangedListener) {
         val nativeListener = synchronized(listeners) { listeners.remove(listener) } ?: return
         ao.nativeTrack.removeOnRoutingChangedListener(nativeListener)
     }
@@ -147,18 +147,18 @@ class NativeTrackExtendedAudioOutput(private val ao: NativeTrackAudioOutput) : E
     }
 }
 
-class AudioTrackExtendedAudioOutput(private val ao: AudioTrackAudioOutput) : ExtendedAudioOutput(ao) {
+class AudioTrackExtendedAudioOutput(private val ao: AudioTrackAudioOutput) : ForwardingAudioOutput(ao), ExtendedAudioOutput {
     companion object {
         private const val TAG = "ATExtendedAO"
     }
-    private val listeners = IdentityHashMap<RoutingChangedListener, Any>()
+    private val listeners = IdentityHashMap<ExtendedAudioOutput.RoutingChangedListener, Any>()
     override val routedDevice: AudioDeviceInfo?
         get() = ao.audioTrack.routedDevice
     override val isInitialized: Boolean
         get() = ao.audioTrack.state != AudioTrack.STATE_UNINITIALIZED
 
     override fun addOnRoutingChangedListener(
-        listener: RoutingChangedListener,
+        listener: ExtendedAudioOutput.RoutingChangedListener,
         handler: Handler
     ) {
         val nativeListener = synchronized(listeners) {
@@ -179,7 +179,7 @@ class AudioTrackExtendedAudioOutput(private val ao: AudioTrackAudioOutput) : Ext
         }
     }
 
-    override fun removeOnRoutingChangedListener(listener: RoutingChangedListener) {
+    override fun removeOnRoutingChangedListener(listener: ExtendedAudioOutput.RoutingChangedListener) {
         val nativeListener = synchronized(listeners) { listeners.remove(listener) } ?: return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             ao.audioTrack.removeOnRoutingChangedListener(nativeListener as AudioRouting.OnRoutingChangedListener)

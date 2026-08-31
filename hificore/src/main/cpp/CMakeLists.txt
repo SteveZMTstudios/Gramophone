@@ -33,6 +33,7 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
 		android_linker_ns.cpp
 		NativeTrack.cpp
 		compressor/dynamic_range_compression.cpp
+		streaming.cpp
 		libusb/async_transfer.c
 		libusb/async_usb_thread.c
 		libusb/libusb_device_descriptor.c
